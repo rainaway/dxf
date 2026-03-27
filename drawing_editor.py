@@ -8,8 +8,9 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QGraphicsView, QGraphics
                              QGraphicsLineItem, QGraphicsEllipseItem, QGraphicsPathItem,
                              QGraphicsTextItem, QGraphicsRectItem, QGraphicsPolygonItem,
                              QGraphicsItemGroup, QInputDialog, QColorDialog, QComboBox,
-                             QMenu, QGraphicsSimpleTextItem, QCheckBox, QGroupBox, QHBoxLayout)
-from PyQt5.QtCore import Qt, QRectF, QPointF, QLineF, QSizeF
+                             QMenu, QGraphicsSimpleTextItem, QCheckBox, QGroupBox, QHBoxLayout,
+                             QMenuBar)
+from PyQt5.QtCore import Qt, QRectF, QPointF, QLineF, QSizeF, QSettings
 from PyQt5.QtGui import QPen, QBrush, QColor, QFont, QPainterPath, QPolygonF, QPainter, QTransform
 from PyQt5.QtPrintSupport import QPrinter, QPrintDialog, QPageSetupDialog
 import ezdxf
@@ -23,6 +24,10 @@ PAPER_SIZES = {
     "A3": (297, 420),
     "A4": (210, 297),
 }
+
+# Default colors
+DEFAULT_BACKGROUND_COLOR = QColor(0, 0, 0)  # Black
+DEFAULT_OBJECT_COLOR = QColor(255, 255, 255)  # White
 
 # ------------------ Модель данных ------------------
 class GraphicObject:
@@ -979,8 +984,12 @@ class CadWindow(QMainWindow):
         self.current_paper = "A4"
         self.paper_landscape = True
         
+        # Color settings
+        self.background_color = DEFAULT_BACKGROUND_COLOR
+        self.object_color = DEFAULT_OBJECT_COLOR
+        
         self.scene = QGraphicsScene()
-        self.scene.setBackgroundBrush(QBrush(QColor(255,255,255)))
+        self.scene.setBackgroundBrush(QBrush(self.background_color))
         self.view = CadView(self)
         self.view.setScene(self.scene)
         self.setCentralWidget(self.view)
@@ -994,9 +1003,14 @@ class CadWindow(QMainWindow):
         self.init_statusbar()
         self.create_empty_document()
         self.update_paper_bounds()
+        self.load_settings()
 
     def init_ui(self):
-        toolbar = self.addToolBar("Tools")
+        # Create menu bar
+        menubar = self.menuBar()
+        
+        # File menu
+        file_menu = menubar.addMenu("File")
         new_action = QAction("New", self)
         new_action.triggered.connect(self.new_document)
         open_action = QAction("Open", self)
@@ -1007,7 +1021,27 @@ class CadWindow(QMainWindow):
         save_as_action.triggered.connect(self.save_as_file)
         export_pdf_action = QAction("Export PDF", self)
         export_pdf_action.triggered.connect(self.export_pdf)
-
+        
+        file_menu.addAction(new_action)
+        file_menu.addAction(open_action)
+        file_menu.addAction(save_action)
+        file_menu.addAction(save_as_action)
+        file_menu.addSeparator()
+        file_menu.addAction(export_pdf_action)
+        
+        # View menu
+        view_menu = menubar.addMenu("View")
+        fit_action = QAction("Fit to Window", self)
+        fit_action.triggered.connect(self.fit_content_to_window)
+        view_menu.addAction(fit_action)
+        
+        # Settings menu
+        settings_menu = menubar.addMenu("Settings")
+        colors_action = QAction("Colors...", self)
+        colors_action.triggered.connect(self.show_color_settings)
+        settings_menu.addAction(colors_action)
+        
+        toolbar = self.addToolBar("Tools")
         toolbar.addAction(new_action)
         toolbar.addAction(open_action)
         toolbar.addAction(save_action)
@@ -1169,6 +1203,106 @@ class CadWindow(QMainWindow):
         self.setStatusBar(self.status)
         self.status_label = QLabel("Ready")
         self.status.addWidget(self.status_label)
+    
+    def load_settings(self):
+        """Load user settings from QSettings."""
+        settings = QSettings("DXFEditor", "Settings")
+        
+        # Load color settings
+        bg_color = settings.value("background_color", DEFAULT_BACKGROUND_COLOR)
+        obj_color = settings.value("object_color", DEFAULT_OBJECT_COLOR)
+        
+        if isinstance(bg_color, str):
+            bg_color = QColor(bg_color)
+        if isinstance(obj_color, str):
+            obj_color = QColor(obj_color)
+            
+        self.background_color = bg_color
+        self.object_color = obj_color
+        self.scene.setBackgroundBrush(QBrush(self.background_color))
+        
+        # Update button color if it exists
+        if hasattr(self, 'line_color_btn'):
+            self.line_color_btn.setStyleSheet(f"background-color: {self.object_color.name()}")
+            self.line_color_btn.color = self.object_color
+    
+    def save_settings(self):
+        """Save user settings to QSettings."""
+        settings = QSettings("DXFEditor", "Settings")
+        settings.setValue("background_color", self.background_color.name())
+        settings.setValue("object_color", self.object_color.name())
+    
+    def show_color_settings(self):
+        """Show color settings dialog."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Color Settings")
+        layout = QFormLayout(dialog)
+        
+        bg_btn = QPushButton("Background Color")
+        bg_btn.setStyleSheet(f"background-color: {self.background_color.name()}")
+        bg_btn.clicked.connect(lambda: self.choose_background_color(bg_btn))
+        layout.addRow("Background:", bg_btn)
+        
+        obj_btn = QPushButton("Object Color")
+        obj_btn.setStyleSheet(f"background-color: {self.object_color.name()}")
+        obj_btn.clicked.connect(lambda: self.choose_object_color(obj_btn))
+        layout.addRow("Objects:", obj_btn)
+        
+        ok_btn = QPushButton("OK")
+        ok_btn.clicked.connect(dialog.accept)
+        layout.addRow(ok_btn)
+        
+        dialog.exec_()
+        self.save_settings()
+    
+    def choose_background_color(self, btn):
+        """Choose background color."""
+        color = QColorDialog.getColor(self.background_color, self, "Select Background Color")
+        if color.isValid():
+            self.background_color = color
+            self.scene.setBackgroundBrush(QBrush(color))
+            btn.setStyleSheet(f"background-color: {color.name()}")
+    
+    def choose_object_color(self, btn):
+        """Choose object color."""
+        color = QColorDialog.getColor(self.object_color, self, "Select Object Color")
+        if color.isValid():
+            self.object_color = color
+            btn.setStyleSheet(f"background-color: {color.name()}")
+            # Apply to all existing objects
+            for item in self.scene.items():
+                if hasattr(item, 'setPen') and not hasattr(item, '_is_paper_border'):
+                    pen = item.pen()
+                    pen.setColor(color)
+                    item.setPen(pen)
+                elif hasattr(item, 'setDefaultTextColor'):
+                    item.setDefaultTextColor(color)
+    
+    def fit_content_to_window(self):
+        """Fit all content to the window with margins."""
+        # Get all items except paper border
+        drawing_items = [item for item in self.scene.items() 
+                        if not (isinstance(item, QGraphicsRectItem) and hasattr(item, '_is_paper_border'))]
+        
+        if not drawing_items:
+            # If no drawing items, fit to paper bounds
+            self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
+            return
+        
+        # Calculate bounding box of all drawing items
+        bbox = drawing_items[0].sceneBoundingRect()
+        for item in drawing_items[1:]:
+            bbox = bbox.united(item.sceneBoundingRect())
+        
+        if bbox.isEmpty():
+            return
+        
+        # Add 10% margin
+        margin_x = bbox.width() * 0.1
+        margin_y = bbox.height() * 0.1
+        bbox.adjust(-margin_x, -margin_y, margin_x, margin_y)
+        
+        self.view.fitInView(bbox, Qt.KeepAspectRatio)
     
     def update_paper_bounds(self):
         """Update the scene rect to show paper bounds."""
@@ -1438,6 +1572,9 @@ class CadWindow(QMainWindow):
 
     def export_pdf(self):
         """Export current scene to PDF with paper size settings."""
+        # First fit content to window to ensure proper scaling
+        self.fit_content_to_window()
+        
         # Get all items except paper border
         drawing_items = [item for item in self.scene.items() 
                         if not (isinstance(item, QGraphicsRectItem) and hasattr(item, '_is_paper_border'))]
@@ -1462,19 +1599,13 @@ class CadWindow(QMainWindow):
         else:
             printer.setOrientation(QPrinter.Portrait)
         
-        # Set custom page size in points (1 mm = 2.83465 points)
-        printer.setPageSize(QPrinter.A4)  # Default, will be overridden by custom rect
+        # Set page size in millimeters
+        printer.setPageSizeMM(QSizeF(width_mm, height_mm))
         
-        bbox = self.scene.itemsBoundingRect()
-        # Exclude paper border from bounding box calculation
-        for item in self.scene.items():
-            if isinstance(item, QGraphicsRectItem) and hasattr(item, '_is_paper_border'):
-                continue
-            item_bbox = item.sceneBoundingRect()
-            if bbox.isEmpty():
-                bbox = item_bbox
-            else:
-                bbox = bbox.united(item_bbox)
+        # Calculate bounding box of drawing items
+        bbox = drawing_items[0].sceneBoundingRect()
+        for item in drawing_items[1:]:
+            bbox = bbox.united(item.sceneBoundingRect())
         
         if bbox.isEmpty():
             QMessageBox.warning(self, "Warning", "Empty drawing.")
@@ -1482,8 +1613,9 @@ class CadWindow(QMainWindow):
 
         painter = QPainter(printer)
         painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.TextAntialiasing)
 
-        # Get the actual page rectangle in points
+        # Get the page rectangle in points
         page_rect = printer.pageRect(QPrinter.DevicePixel)
         
         # Calculate scale to fit drawing on page with margins
@@ -1491,7 +1623,6 @@ class CadWindow(QMainWindow):
         available_width = width_mm - 2 * margin
         available_height = height_mm - 2 * margin
         
-        # Convert bbox to mm if needed (assuming scene units are mm)
         draw_width = bbox.width()
         draw_height = bbox.height()
         
@@ -1502,12 +1633,12 @@ class CadWindow(QMainWindow):
         else:
             scale = 1.0
 
-        # Center the drawing on the page
+        # Apply transformations
         painter.translate(page_rect.center())
         painter.scale(scale, scale)
         painter.translate(-bbox.center())
 
-        # Render only drawing items (not paper border)
+        # Render all drawing items using the view's render method
         for item in drawing_items:
             item.paint(painter, None, None)
         
@@ -1549,10 +1680,31 @@ class CadWindow(QMainWindow):
 
     def add_entity_to_scene(self, entity):
         try:
+            # Get color from entity or use default object color
+            color = self.object_color
+            if hasattr(entity, 'dxf') and hasattr(entity.dxf, 'color') and entity.dxf.color:
+                # Convert ACI color to QColor
+                aci_color = entity.dxf.color
+                if isinstance(aci_color, int) and aci_color > 0:
+                    # Simple ACI color mapping (basic colors)
+                    color_map = {
+                        1: QColor(255, 0, 0),    # Red
+                        2: QColor(255, 255, 0),  # Yellow
+                        3: QColor(0, 255, 0),    # Green
+                        4: QColor(0, 255, 255),  # Cyan
+                        5: QColor(0, 0, 255),    # Blue
+                        6: QColor(255, 0, 255),  # Magenta
+                        7: QColor(255, 255, 255),# White
+                    }
+                    color = color_map.get(aci_color, self.object_color)
+            
+            pen = QPen(color, 0.2)
+            
             if entity.dxftype() == 'POINT':
                 x, y, z = entity.dxf.location
                 obj = PointObject(x, y, entity)
                 item = GraphicsPoint(obj, 0.2)
+                item.setBrush(QBrush(color))
                 self.scene.addItem(item)
                 obj.graphics_item = item
                 self.obj_map[entity] = obj
@@ -1562,6 +1714,7 @@ class CadWindow(QMainWindow):
                 x2, y2, z2 = entity.dxf.end
                 obj = LineObject(x1, y1, x2, y2, entity)
                 item = GraphicsLine(obj)
+                item.setPen(pen)
                 self.scene.addItem(item)
                 obj.graphics_item = item
                 self.obj_map[entity] = obj
@@ -1571,6 +1724,7 @@ class CadWindow(QMainWindow):
                 r = entity.dxf.radius
                 obj = CircleObject(cx, cy, r, entity)
                 item = GraphicsCircle(obj)
+                item.setPen(pen)
                 self.scene.addItem(item)
                 obj.graphics_item = item
                 self.obj_map[entity] = obj
@@ -1582,6 +1736,7 @@ class CadWindow(QMainWindow):
                 end = entity.dxf.end_angle
                 obj = ArcObject(cx, cy, r, start, end, entity)
                 item = GraphicsArc(obj)
+                item.setPen(pen)
                 self.scene.addItem(item)
                 obj.graphics_item = item
                 self.obj_map[entity] = obj
@@ -1592,6 +1747,7 @@ class CadWindow(QMainWindow):
                 height = entity.dxf.height
                 obj = TextObject(insert.x, insert.y, text, height, entity)
                 item = GraphicsText(obj)
+                item.setDefaultTextColor(color)
                 self.scene.addItem(item)
                 obj.graphics_item = item
                 self.obj_map[entity] = obj
@@ -1604,6 +1760,7 @@ class CadWindow(QMainWindow):
                         p2 = points[i+1]
                         line_obj = LineObject(p1[0], p1[1], p2[0], p2[1], None)
                         item = GraphicsLine(line_obj)
+                        item.setPen(pen)
                         self.scene.addItem(item)
                         self.list_widget.addItem(f"Polyline segment")
         except Exception as e:

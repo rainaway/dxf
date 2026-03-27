@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import (
     QColorDialog,
 )
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QPen
 
 from drawing_editor.core.models import GraphicObject
 

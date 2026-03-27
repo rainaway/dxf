@@ -1,7 +1,6 @@
 import sys
 import math
 import traceback
-from functools import lru_cache
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
                              QFileDialog, QToolBar, QAction, QStatusBar, QVBoxLayout,
                              QWidget, QDockWidget, QListWidget, QPushButton, QDialog,
@@ -15,52 +14,8 @@ from PyQt5.QtGui import QPen, QBrush, QColor, QFont, QPainterPath, QPolygonF, QP
 import ezdxf
 from ezdxf.math import Vec3
 
-# ------------------ Utility Functions ------------------
-@lru_cache(maxsize=64)
-def rgb_to_color_index(r, g, b):
-    """Convert RGB to AutoCAD color index (cached for performance)."""
-    color_map = {
-        (255, 0, 0): 1, (255, 255, 0): 2, (0, 255, 0): 3,
-        (0, 255, 255): 4, (0, 0, 255): 5, (255, 0, 255): 6,
-    }
-    return color_map.get((r, g, b), 7)
-
-
-def get_linetype_name(style):
-    """Map Qt pen style to DXF linetype."""
-    linetypes = {
-        Qt.DashLine: "DASHED",
-        Qt.DashDotLine: "DASHDOT",
-        Qt.SolidLine: "CONTINUOUS",
-    }
-    return linetypes.get(style, "CONTINUOUS")
-
-
-def apply_pen_style(pen, width=0.2, color=None, style=Qt.SolidLine):
-    """Apply consistent pen styling."""
-    if color:
-        pen.setColor(color)
-    pen.setWidthF(width)
-    pen.setStyle(style)
-    return pen
-
-
-def update_dxf_entity_style(entity, color, width, style):
-    """Update DXF entity style attributes."""
-    if not entity:
-        return
-    try:
-        entity.dxf.rgb = (color.red(), color.green(), color.blue())
-    except AttributeError:
-        entity.dxf.color = rgb_to_color_index(color.red(), color.green(), color.blue())
-    entity.dxf.linetype = get_linetype_name(style)
-    entity.dxf.lineweight = int(width * 100) if width else 25
-
-
-# ------------------ Data Model for Graphic Objects ------------------
+# ------------------ Модель данных для графических объектов ------------------
 class GraphicObject:
-    __slots__ = ('dxf_entity', 'graphics_item', 'type', 'params')
-    
     def __init__(self, dxf_entity=None):
         self.dxf_entity = dxf_entity
         self.graphics_item = None
@@ -68,8 +23,6 @@ class GraphicObject:
         self.params = {}
 
 class PointObject(GraphicObject):
-    __slots__ = ('x', 'y')
-    
     def __init__(self, x, y, dxf_entity=None):
         super().__init__(dxf_entity)
         self.type = "Point"
@@ -77,8 +30,6 @@ class PointObject(GraphicObject):
         self.y = y
 
 class LineObject(GraphicObject):
-    __slots__ = ('x1', 'y1', 'x2', 'y2')
-    
     def __init__(self, x1, y1, x2, y2, dxf_entity=None):
         super().__init__(dxf_entity)
         self.type = "Line"
@@ -86,8 +37,6 @@ class LineObject(GraphicObject):
         self.x2, self.y2 = x2, y2
 
 class CircleObject(GraphicObject):
-    __slots__ = ('cx', 'cy', 'radius')
-    
     def __init__(self, cx, cy, radius, dxf_entity=None):
         super().__init__(dxf_entity)
         self.type = "Circle"
@@ -95,8 +44,6 @@ class CircleObject(GraphicObject):
         self.radius = radius
 
 class RectObject(GraphicObject):
-    __slots__ = ('x1', 'y1', 'x2', 'y2')
-    
     def __init__(self, x1, y1, x2, y2, dxf_entity=None):
         super().__init__(dxf_entity)
         self.type = "Rectangle"
@@ -104,8 +51,6 @@ class RectObject(GraphicObject):
         self.x2, self.y2 = x2, y2
 
 class ArcObject(GraphicObject):
-    __slots__ = ('cx', 'cy', 'radius', 'start_angle', 'end_angle')
-    
     def __init__(self, cx, cy, radius, start_angle, end_angle, dxf_entity=None):
         super().__init__(dxf_entity)
         self.type = "Arc"
@@ -115,8 +60,6 @@ class ArcObject(GraphicObject):
         self.end_angle = end_angle
 
 class TextObject(GraphicObject):
-    __slots__ = ('x', 'y', 'text', 'height')
-    
     def __init__(self, x, y, text, height=2.5, dxf_entity=None):
         super().__init__(dxf_entity)
         self.type = "Text"
@@ -125,8 +68,6 @@ class TextObject(GraphicObject):
         self.height = height
 
 class DimensionObject(GraphicObject):
-    __slots__ = ('dim_type', 'p1', 'p2', 'offset', 'radius', 'diameter', 'angle')
-    
     def __init__(self, p1, p2, offset=2, dim_type="Linear", dxf_entity=None):
         super().__init__(dxf_entity)
         self.type = "Dimension"
@@ -138,7 +79,7 @@ class DimensionObject(GraphicObject):
         self.diameter = None
         self.angle = None
 
-# ------------------ PyQt Graphics Items ------------------
+# ------------------ Графические элементы PyQt ------------------
 class GraphicsPoint(QGraphicsEllipseItem):
     def __init__(self, point_obj, size=0.2):
         super().__init__(-size/2, -size/2, size, size)
@@ -201,7 +142,10 @@ class GraphicsArc(QGraphicsPathItem):
         r = self.arc_obj.radius
         start = self.arc_obj.start_angle
         end = self.arc_obj.end_angle
-        span = (end - start) if end >= start else (360 - (start - end))
+        if end < start:
+            span = 360 - (start - end)
+        else:
+            span = end - start
         rect = QRectF(cx - r, cy - r, 2*r, 2*r)
         path = QPainterPath()
         path.arcMoveTo(rect, start)
@@ -215,7 +159,7 @@ class GraphicsText(QGraphicsTextItem):
         self.setPos(text_obj.x, text_obj.y)
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.ItemIsMovable, True)
-        self.setDefaultTextColor(QColor(0, 0, 0))
+        self.setDefaultTextColor(QColor(0,0,0))
         self.setFont(QFont("Arial", int(text_obj.height)))
 
     def itemChange(self, change, value):
@@ -327,14 +271,11 @@ class GraphicsDimension(QGraphicsItemGroup):
         self.addToGroup(arc)
         self.addToGroup(text)
 
-# ------------------ Snap Manager ------------------
+# ------------------ Привязка ------------------
 class SnapManager:
-    __slots__ = ('scene', 'snap_distance', 'snap_distance_sq', 'snap_to_endpoints', 'snap_to_center')
-    
     def __init__(self, scene):
         self.scene = scene
         self.snap_distance = 30
-        self.snap_distance_sq = self.snap_distance ** 2
         self.snap_to_endpoints = True
         self.snap_to_center = True
 
@@ -342,44 +283,40 @@ class SnapManager:
         scene_pos = view.mapToScene(screen_pos)
         if not self.scene:
             return scene_pos
-        
-        best_dist_sq = self.snap_distance_sq
+        best_dist = self.snap_distance
         best_point = None
-        
         for item in self.scene.items():
             if self.snap_to_endpoints:
                 if isinstance(item, GraphicsLine):
                     line = item.line()
-                    for p in (line.p1(), line.p2()):
+                    for p in [line.p1(), line.p2()]:
                         pixel_pos = view.mapFromScene(p)
-                        dist_sq = (screen_pos - pixel_pos).manhattanLength() ** 2
-                        if dist_sq < best_dist_sq:
-                            best_dist_sq = dist_sq
+                        dist = (screen_pos - pixel_pos).manhattanLength()
+                        if dist < best_dist:
+                            best_dist = dist
                             best_point = p
                 elif isinstance(item, GraphicsRect):
                     rect = item.rect()
-                    for p in (rect.topLeft(), rect.topRight(), rect.bottomLeft(), rect.bottomRight()):
+                    for p in [rect.topLeft(), rect.topRight(), rect.bottomLeft(), rect.bottomRight()]:
                         pixel_pos = view.mapFromScene(p)
-                        dist_sq = (screen_pos - pixel_pos).manhattanLength() ** 2
-                        if dist_sq < best_dist_sq:
-                            best_dist_sq = dist_sq
+                        dist = (screen_pos - pixel_pos).manhattanLength()
+                        if dist < best_dist:
+                            best_dist = dist
                             best_point = p
                 elif isinstance(item, GraphicsPoint):
                     p = item.pos()
                     pixel_pos = view.mapFromScene(p)
-                    dist_sq = (screen_pos - pixel_pos).manhattanLength() ** 2
-                    if dist_sq < best_dist_sq:
-                        best_dist_sq = dist_sq
+                    dist = (screen_pos - pixel_pos).manhattanLength()
+                    if dist < best_dist:
+                        best_dist = dist
                         best_point = p
-            
             if self.snap_to_center and isinstance(item, GraphicsCircle):
                 p = QPointF(item.circle_obj.cx, item.circle_obj.cy)
                 pixel_pos = view.mapFromScene(p)
-                dist_sq = (screen_pos - pixel_pos).manhattanLength() ** 2
-                if dist_sq < best_dist_sq:
-                    best_dist_sq = dist_sq
+                dist = (screen_pos - pixel_pos).manhattanLength()
+                if dist < best_dist:
+                    best_dist = dist
                     best_point = p
-        
         return best_point if best_point else scene_pos
 
 # ------------------ Кастомный вид для рисования ------------------
@@ -614,7 +551,7 @@ class CadView(QGraphicsView):
             self.temp_item = None
         self.start_point = None
 
-# ------------------ Property Dialog ------------------
+# ------------------ Диалог свойств ------------------
 class PropertyDialog(QDialog):
     def __init__(self, obj, parent=None):
         super().__init__(parent)
@@ -652,12 +589,42 @@ class PropertyDialog(QDialog):
                 pen.setColor(self.color_btn.color)
             pen.setWidthF(float(self.width_edit.text()))
             linetype = self.linetype_combo.currentText()
-            style = Qt.DashLine if linetype == "Dash" else Qt.DashDotLine if linetype == "DashDot" else Qt.SolidLine
-            pen.setStyle(style)
+            if linetype == "Dash":
+                pen.setStyle(Qt.DashLine)
+            elif linetype == "DashDot":
+                pen.setStyle(Qt.DashDotLine)
+            else:
+                pen.setStyle(Qt.SolidLine)
             item.setPen(pen)
 
             if self.obj.dxf_entity:
-                update_dxf_entity_style(self.obj.dxf_entity, pen.color(), pen.widthF(), style)
+                color = pen.color()
+                try:
+                    self.obj.dxf_entity.dxf.rgb = (color.red(), color.green(), color.blue())
+                except AttributeError:
+                    r, g, b = color.red(), color.green(), color.blue()
+                    if (r, g, b) == (255, 0, 0):
+                        idx = 1
+                    elif (r, g, b) == (255, 255, 0):
+                        idx = 2
+                    elif (r, g, b) == (0, 255, 0):
+                        idx = 3
+                    elif (r, g, b) == (0, 255, 255):
+                        idx = 4
+                    elif (r, g, b) == (0, 0, 255):
+                        idx = 5
+                    elif (r, g, b) == (255, 0, 255):
+                        idx = 6
+                    else:
+                        idx = 7
+                    self.obj.dxf_entity.dxf.color = idx
+
+                if pen.style() == Qt.DashLine:
+                    self.obj.dxf_entity.dxf.linetype = "DASHED"
+                elif pen.style() == Qt.DashDotLine:
+                    self.obj.dxf_entity.dxf.linetype = "DASHDOT"
+                else:
+                    self.obj.dxf_entity.dxf.linetype = "CONTINUOUS"
         self.accept()
 
 # ------------------ Основное окно ------------------
@@ -677,10 +644,11 @@ class CadWindow(QMainWindow):
         self.dxf_modelspace = None
         self.obj_map = {}
         self.current_file = None
+        self._unsaved_changes = False
 
         self.init_ui()
         self.init_statusbar()
-        self.new_document()
+        self.create_empty_document()   # создаём пустой документ без запроса пути
 
     def init_ui(self):
         toolbar = self.addToolBar("Tools")
@@ -794,6 +762,17 @@ class CadWindow(QMainWindow):
         self.status_label = QLabel("Ready")
         self.status.addWidget(self.status_label)
 
+    def create_empty_document(self):
+        """Создаёт новый пустой документ в памяти без запроса имени файла."""
+        self.dxf_doc = ezdxf.new('R2010')
+        self.dxf_modelspace = self.dxf_doc.modelspace()
+        self.current_file = None
+        self.scene.clear()
+        self.list_widget.clear()
+        self.obj_map.clear()
+        self.status_label.setText("New document (unsaved)")
+        self.view.fitInView(self.scene.itemsBoundingRect(), Qt.KeepAspectRatio)
+
     def set_tool(self, tool):
         self.view.set_tool(tool)
         self.status_label.setText(f"Tool: {tool}")
@@ -823,44 +802,79 @@ class CadWindow(QMainWindow):
             self.line_color_btn.color = color
 
     def apply_style_to_selected(self):
-        """Apply current line style settings to selected objects."""
+        """Применить текущие настройки стиля к выделенному объекту."""
         selected = self.scene.selectedItems()
         if not selected:
             QMessageBox.information(self, "Info", "No object selected.")
             return
-        
-        width = float(self.line_width_edit.text())
-        lt = self.line_type_combo.currentText()
-        style = Qt.DashLine if lt == "Dash" else Qt.DashDotLine if lt == "DashDot" else Qt.SolidLine
-        
         for item in selected:
+            # Находим соответствующий GraphicObject
             for obj in self.obj_map.values():
                 if obj.graphics_item == item:
                     if hasattr(item, 'pen'):
                         pen = item.pen()
-                        apply_pen_style(pen, width, self.current_line_color, style)
+                        pen.setColor(self.current_line_color)
+                        pen.setWidthF(float(self.line_width_edit.text()))
+                        lt = self.line_type_combo.currentText()
+                        if lt == "Dash":
+                            pen.setStyle(Qt.DashLine)
+                        elif lt == "DashDot":
+                            pen.setStyle(Qt.DashDotLine)
+                        else:
+                            pen.setStyle(Qt.SolidLine)
                         item.setPen(pen)
                         if obj.dxf_entity:
-                            update_dxf_entity_style(obj.dxf_entity, self.current_line_color, width, style)
+                            # Сохранить в DXF
+                            color = pen.color()
+                            try:
+                                obj.dxf_entity.dxf.rgb = (color.red(), color.green(), color.blue())
+                            except AttributeError:
+                                r, g, b = color.red(), color.green(), color.blue()
+                                if (r, g, b) == (255, 0, 0):
+                                    idx = 1
+                                elif (r, g, b) == (255, 255, 0):
+                                    idx = 2
+                                elif (r, g, b) == (0, 255, 0):
+                                    idx = 3
+                                elif (r, g, b) == (0, 255, 255):
+                                    idx = 4
+                                elif (r, g, b) == (0, 0, 255):
+                                    idx = 5
+                                elif (r, g, b) == (255, 0, 255):
+                                    idx = 6
+                                else:
+                                    idx = 7
+                                obj.dxf_entity.dxf.color = idx
+                            if pen.style() == Qt.DashLine:
+                                obj.dxf_entity.dxf.linetype = "DASHED"
+                            elif pen.style() == Qt.DashDotLine:
+                                obj.dxf_entity.dxf.linetype = "DASHDOT"
+                            else:
+                                obj.dxf_entity.dxf.linetype = "CONTINUOUS"
                     break
-        
         QMessageBox.information(self, "Done", "Style applied to selected object(s).")
 
     def new_document(self):
-        fname, _ = QFileDialog.getSaveFileName(self, "Create new DXF", "", "DXF Files (*.dxf)")
-        if not fname:
-            return
-        self.dxf_doc = ezdxf.new('R2010')
-        self.dxf_modelspace = self.dxf_doc.modelspace()
-        self.current_file = fname
-        self.scene.clear()
-        self.list_widget.clear()
-        self.obj_map.clear()
-        self.status_label.setText(f"New document: {fname}")
-        self.dxf_doc.saveas(fname)
-        self.view.fitInView(self.scene.itemsBoundingRect(), Qt.KeepAspectRatio)
+        # Запрашиваем имя файла, если пользователь хочет сохранить текущий
+        if self.dxf_doc and self.obj_map:
+            reply = QMessageBox.question(self, "Save changes?",
+                                         "Do you want to save changes before creating a new document?",
+                                         QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+            if reply == QMessageBox.Yes:
+                self.save_file()
+            elif reply == QMessageBox.Cancel:
+                return
+        self.create_empty_document()
 
     def open_file(self):
+        if self.dxf_doc and self.obj_map:
+            reply = QMessageBox.question(self, "Save changes?",
+                                         "Do you want to save changes before opening another file?",
+                                         QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+            if reply == QMessageBox.Yes:
+                self.save_file()
+            elif reply == QMessageBox.Cancel:
+                return
         fname, _ = QFileDialog.getOpenFileName(self, "Open DXF", "", "DXF Files (*.dxf)")
         if not fname:
             return
@@ -1034,31 +1048,41 @@ class CadWindow(QMainWindow):
                     pass
                 break
 
-    def _apply_style_to_item(self, item, entity):
-        """Apply current line style to a graphics item and DXF entity."""
-        pen = item.pen() if hasattr(item, 'pen') else None
-        if pen:
-            apply_pen_style(pen, float(self.line_width_edit.text()), 
-                          self.current_line_color,
-                          Qt.DashLine if self.line_type_combo.currentText() == "Dash" else
-                          Qt.DashDotLine if self.line_type_combo.currentText() == "DashDot" else
-                          Qt.SolidLine)
-            item.setPen(pen)
-        else:
-            item.setDefaultTextColor(self.current_line_color)
-        
-        if entity:
-            update_dxf_entity_style(entity, self.current_line_color,
-                                   float(self.line_width_edit.text()),
-                                   Qt.DashLine if self.line_type_combo.currentText() == "Dash" else
-                                   Qt.DashDotLine if self.line_type_combo.currentText() == "DashDot" else
-                                   Qt.SolidLine)
-
+    # ------------------ Добавление новых примитивов ------------------
     def add_line(self, x1, y1, x2, y2):
         entity = self.dxf_modelspace.add_line((x1, y1), (x2, y2))
         obj = LineObject(x1, y1, x2, y2, entity)
         item = GraphicsLine(obj)
-        self._apply_style_to_item(item, entity)
+        pen = item.pen()
+        pen.setColor(self.current_line_color)
+        pen.setWidthF(float(self.line_width_edit.text()))
+        lt = self.line_type_combo.currentText()
+        if lt == "Dash":
+            pen.setStyle(Qt.DashLine)
+        elif lt == "DashDot":
+            pen.setStyle(Qt.DashDotLine)
+        else:
+            pen.setStyle(Qt.SolidLine)
+        item.setPen(pen)
+        # Сохранить в DXF
+        try:
+            entity.dxf.rgb = (self.current_line_color.red(), self.current_line_color.green(), self.current_line_color.blue())
+        except AttributeError:
+            r,g,b = self.current_line_color.red(), self.current_line_color.green(), self.current_line_color.blue()
+            if (r,g,b) == (255,0,0): idx=1
+            elif (r,g,b) == (255,255,0): idx=2
+            elif (r,g,b) == (0,255,0): idx=3
+            elif (r,g,b) == (0,255,255): idx=4
+            elif (r,g,b) == (0,0,255): idx=5
+            elif (r,g,b) == (255,0,255): idx=6
+            else: idx=7
+            entity.dxf.color = idx
+        if lt == "Dash":
+            entity.dxf.linetype = "DASHED"
+        elif lt == "DashDot":
+            entity.dxf.linetype = "DASHDOT"
+        else:
+            entity.dxf.linetype = "CONTINUOUS"
         self.scene.addItem(item)
         obj.graphics_item = item
         self.obj_map[entity] = obj
@@ -1068,7 +1092,35 @@ class CadWindow(QMainWindow):
         entity = self.dxf_modelspace.add_circle((cx, cy), r)
         obj = CircleObject(cx, cy, r, entity)
         item = GraphicsCircle(obj)
-        self._apply_style_to_item(item, entity)
+        pen = item.pen()
+        pen.setColor(self.current_line_color)
+        pen.setWidthF(float(self.line_width_edit.text()))
+        lt = self.line_type_combo.currentText()
+        if lt == "Dash":
+            pen.setStyle(Qt.DashLine)
+        elif lt == "DashDot":
+            pen.setStyle(Qt.DashDotLine)
+        else:
+            pen.setStyle(Qt.SolidLine)
+        item.setPen(pen)
+        try:
+            entity.dxf.rgb = (self.current_line_color.red(), self.current_line_color.green(), self.current_line_color.blue())
+        except AttributeError:
+            r,g,b = self.current_line_color.red(), self.current_line_color.green(), self.current_line_color.blue()
+            if (r,g,b) == (255,0,0): idx=1
+            elif (r,g,b) == (255,255,0): idx=2
+            elif (r,g,b) == (0,255,0): idx=3
+            elif (r,g,b) == (0,255,255): idx=4
+            elif (r,g,b) == (0,0,255): idx=5
+            elif (r,g,b) == (255,0,255): idx=6
+            else: idx=7
+            entity.dxf.color = idx
+        if lt == "Dash":
+            entity.dxf.linetype = "DASHED"
+        elif lt == "DashDot":
+            entity.dxf.linetype = "DASHDOT"
+        else:
+            entity.dxf.linetype = "CONTINUOUS"
         self.scene.addItem(item)
         obj.graphics_item = item
         self.obj_map[entity] = obj
@@ -1079,7 +1131,35 @@ class CadWindow(QMainWindow):
         entity = self.dxf_modelspace.add_lwpolyline(points, close=True)
         obj = RectObject(x1, y1, x2, y2, entity)
         item = GraphicsRect(obj)
-        self._apply_style_to_item(item, entity)
+        pen = item.pen()
+        pen.setColor(self.current_line_color)
+        pen.setWidthF(float(self.line_width_edit.text()))
+        lt = self.line_type_combo.currentText()
+        if lt == "Dash":
+            pen.setStyle(Qt.DashLine)
+        elif lt == "DashDot":
+            pen.setStyle(Qt.DashDotLine)
+        else:
+            pen.setStyle(Qt.SolidLine)
+        item.setPen(pen)
+        try:
+            entity.dxf.rgb = (self.current_line_color.red(), self.current_line_color.green(), self.current_line_color.blue())
+        except AttributeError:
+            r,g,b = self.current_line_color.red(), self.current_line_color.green(), self.current_line_color.blue()
+            if (r,g,b) == (255,0,0): idx=1
+            elif (r,g,b) == (255,255,0): idx=2
+            elif (r,g,b) == (0,255,0): idx=3
+            elif (r,g,b) == (0,255,255): idx=4
+            elif (r,g,b) == (0,0,255): idx=5
+            elif (r,g,b) == (255,0,255): idx=6
+            else: idx=7
+            entity.dxf.color = idx
+        if lt == "Dash":
+            entity.dxf.linetype = "DASHED"
+        elif lt == "DashDot":
+            entity.dxf.linetype = "DASHDOT"
+        else:
+            entity.dxf.linetype = "CONTINUOUS"
         self.scene.addItem(item)
         obj.graphics_item = item
         self.obj_map[entity] = obj
@@ -1089,7 +1169,35 @@ class CadWindow(QMainWindow):
         entity = self.dxf_modelspace.add_arc((cx, cy), r, start_angle, end_angle)
         obj = ArcObject(cx, cy, r, start_angle, end_angle, entity)
         item = GraphicsArc(obj)
-        self._apply_style_to_item(item, entity)
+        pen = item.pen()
+        pen.setColor(self.current_line_color)
+        pen.setWidthF(float(self.line_width_edit.text()))
+        lt = self.line_type_combo.currentText()
+        if lt == "Dash":
+            pen.setStyle(Qt.DashLine)
+        elif lt == "DashDot":
+            pen.setStyle(Qt.DashDotLine)
+        else:
+            pen.setStyle(Qt.SolidLine)
+        item.setPen(pen)
+        try:
+            entity.dxf.rgb = (self.current_line_color.red(), self.current_line_color.green(), self.current_line_color.blue())
+        except AttributeError:
+            r,g,b = self.current_line_color.red(), self.current_line_color.green(), self.current_line_color.blue()
+            if (r,g,b) == (255,0,0): idx=1
+            elif (r,g,b) == (255,255,0): idx=2
+            elif (r,g,b) == (0,255,0): idx=3
+            elif (r,g,b) == (0,255,255): idx=4
+            elif (r,g,b) == (0,0,255): idx=5
+            elif (r,g,b) == (255,0,255): idx=6
+            else: idx=7
+            entity.dxf.color = idx
+        if lt == "Dash":
+            entity.dxf.linetype = "DASHED"
+        elif lt == "DashDot":
+            entity.dxf.linetype = "DASHDOT"
+        else:
+            entity.dxf.linetype = "CONTINUOUS"
         self.scene.addItem(item)
         obj.graphics_item = item
         self.obj_map[entity] = obj
@@ -1100,7 +1208,19 @@ class CadWindow(QMainWindow):
         entity.dxf.insert = (x, y, 0)
         obj = TextObject(x, y, text, height, entity)
         item = GraphicsText(obj)
-        self._apply_style_to_item(item, entity)
+        item.setDefaultTextColor(self.current_line_color)
+        try:
+            entity.dxf.rgb = (self.current_line_color.red(), self.current_line_color.green(), self.current_line_color.blue())
+        except AttributeError:
+            r,g,b = self.current_line_color.red(), self.current_line_color.green(), self.current_line_color.blue()
+            if (r,g,b) == (255,0,0): idx=1
+            elif (r,g,b) == (255,255,0): idx=2
+            elif (r,g,b) == (0,255,0): idx=3
+            elif (r,g,b) == (0,255,255): idx=4
+            elif (r,g,b) == (0,0,255): idx=5
+            elif (r,g,b) == (255,0,255): idx=6
+            else: idx=7
+            entity.dxf.color = idx
         self.scene.addItem(item)
         obj.graphics_item = item
         self.obj_map[entity] = obj

@@ -47,4 +47,6 @@ echo ""
 
 # Run the application
 echo "Starting editor..."
+export PYTHONPATH="$(cd "$(dirname "$0")" && pwd)"
+export QT_QPA_PLATFORM=offscreen
 python3 drawing_editor/main.py

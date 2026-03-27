@@ -228,7 +228,10 @@ class CadView(QGraphicsView):
                     self.hint_item.setFont(QFont("Arial", 8))
                     self.scene().addItem(self.hint_item)
                 self.hint_item.setText(hint)
-                self.hint_item.setPos(point.x() + 5, point.y() - 10)
+                # Position hint to the right of the tooltip (which shows primitive name)
+                scene_pos = self.mapToScene(event.pos())
+                tooltip_offset = len(self.tool) * 6  # Approximate width of tooltip text
+                self.hint_item.setPos(scene_pos.x() + 5 + tooltip_offset, scene_pos.y() - 10)
                 self.hint_item.show()
             else:
                 if self.hint_item:

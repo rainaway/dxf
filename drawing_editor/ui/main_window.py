@@ -7,6 +7,7 @@ application window containing all UI elements and coordinating user actions.
 
 from typing import Optional, Dict, Any
 import sys
+import traceback
 
 from PyQt5.QtWidgets import (
     QMainWindow,
@@ -33,7 +34,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QRectF, QPointF, QLineF
 from PyQt5.QtGui import QPen, QBrush, QColor, QFont, QPainter, QTransform
-from PyQt5.QtPrintSupport import QPrinter
+from PyQt5.QtPrintSupport import QPrinter, QPageLayout, QPageSize
 import ezdxf
 from ezdxf.math import Vec3
 import json
@@ -356,7 +357,8 @@ class CadWindow(QMainWindow):
                     self.prop_end.setText("")
                 if hasattr(item, 'pen'):
                     pen = item.pen()
-                    self.prop_linetype.setText(["Solid", "Dash", "DashDot"][pen.style()])
+                    style_map = {Qt.SolidLine: "Solid", Qt.DashLine: "Dash", Qt.DashDotLine: "DashDot"}
+                    self.prop_linetype.setText(style_map.get(pen.style(), "Solid"))
                     self.prop_color.setText(pen.color().name())
                     self.prop_width.setText(f"{pen.widthF():.2f}")
                 break
@@ -439,33 +441,37 @@ class CadWindow(QMainWindow):
         if not fname:
             return
 
-        printer = QPrinter(QPrinter.HighResolution)
-        printer.setOutputFormat(QPrinter.PdfFormat)
-        printer.setOutputFileName(fname)
-        printer.setPageSize(QPrinter.A4)
-        printer.setOrientation(QPrinter.Landscape)
+        try:
+            printer = QPrinter(QPrinter.HighResolution)
+            printer.setOutputFormat(QPrinter.PdfFormat)
+            printer.setOutputFileName(fname)
+            printer.setPageSize(QPrinter.A4)
+            printer.setOrientation(QPrinter.Landscape)
 
-        bbox = self.scene.itemsBoundingRect()
-        if bbox.isEmpty():
-            QMessageBox.warning(self, "Warning", "Empty drawing.")
-            return
+            bbox = self.scene.itemsBoundingRect()
+            if bbox.isEmpty():
+                QMessageBox.warning(self, "Warning", "Empty drawing.")
+                return
 
-        painter = QPainter(printer)
-        painter.setRenderHint(QPainter.Antialiasing)
+            painter = QPainter(printer)
+            painter.setRenderHint(QPainter.Antialiasing)
 
-        page_rect = printer.pageRect()
-        scale_x = page_rect.width() / bbox.width()
-        scale_y = page_rect.height() / bbox.height()
-        scale = min(scale_x, scale_y) * 0.9
+            page_rect = printer.pageRect(QPrinter.DevicePixel)
+            scale_x = page_rect.width() / bbox.width()
+            scale_y = page_rect.height() / bbox.height()
+            scale = min(scale_x, scale_y) * 0.9
 
-        painter.translate(page_rect.center())
-        painter.scale(scale, scale)
-        painter.translate(-bbox.center())
+            painter.translate(page_rect.center())
+            painter.scale(scale, scale)
+            painter.translate(-bbox.center())
 
-        self.scene.render(painter)
-        painter.end()
+            self.scene.render(painter)
+            painter.end()
 
-        QMessageBox.information(self, "Exported", f"PDF saved to {fname}")
+            QMessageBox.information(self, "Exported", f"PDF saved to {fname}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to export PDF:\n{str(e)}")
+            traceback.print_exc()
 
     def export_html(self):
         """Экспорт текущей сцены в HTML с границами рабочей области А4."""
@@ -853,6 +859,9 @@ class CadWindow(QMainWindow):
         self.list_widget.clear()
         for obj in self.obj_map.values():
             self.list_widget.addItem(self.object_description(obj))
+        # Auto-fit view to show all content after list update
+        if self.scene.items():
+            self.view.fitInView(self.scene.itemsBoundingRect(), Qt.KeepAspectRatio)
 
     # ------------------ Добавление примитивов ------------------
     def add_line(self, x1, y1, x2, y2):
@@ -892,6 +901,9 @@ class CadWindow(QMainWindow):
         obj.graphics_item = item
         self.obj_map[entity] = obj
         self.list_widget.addItem(f"Line ({x1:.2f},{y1:.2f})-({x2:.2f},{y2:.2f})")
+        # Auto-fit view to show all content
+        if self.scene.items():
+            self.view.fitInView(self.scene.itemsBoundingRect(), Qt.KeepAspectRatio)
         return item
 
     def add_circle(self, cx, cy, r):
@@ -931,6 +943,9 @@ class CadWindow(QMainWindow):
         obj.graphics_item = item
         self.obj_map[entity] = obj
         self.list_widget.addItem(f"Circle (r={r:.2f})")
+        # Auto-fit view to show all content
+        if self.scene.items():
+            self.view.fitInView(self.scene.itemsBoundingRect(), Qt.KeepAspectRatio)
         return item
 
     def add_rectangle(self, x1, y1, x2, y2):

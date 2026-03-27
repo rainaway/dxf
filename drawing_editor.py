@@ -430,6 +430,29 @@ class CadView(QGraphicsView):
             self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
             return
         
+        scene_pos = self.mapToScene(event.pos())
+        snapped_pos = scene_pos
+        snap_name = ""
+        
+        # Проверка привязок
+        if self.snap_manager and self.tool != "Select":
+            snapped_pos = self.snap_manager.snap_point(self, event.pos())
+            # Определяем имя привязки
+            if snapped_pos != scene_pos:
+                # Проверяем тип привязки
+                for obj in self.parent_window.obj_map.values():
+                    if obj.type == "Line":
+                        if math.hypot(snapped_pos.x() - obj.x1, snapped_pos.y() - obj.y1) < 0.5:
+                            snap_name = "Endpoint"
+                            break
+                        elif math.hypot(snapped_pos.x() - obj.x2, snapped_pos.y() - obj.y2) < 0.5:
+                            snap_name = "Endpoint"
+                            break
+                    elif obj.type == "Circle":
+                        if math.hypot(snapped_pos.x() - obj.cx, snapped_pos.y() - obj.cy) < 0.5:
+                            snap_name = "Center"
+                            break
+        
         # Подсказка для инструментов рисования (следует за курсором)
         if self.tool != "Select":
             if self.tooltip_item is None:
@@ -439,23 +462,39 @@ class CadView(QGraphicsView):
                 self.scene().addItem(self.tooltip_item)
             
             # Отображение названия инструмента и координат
-            scene_pos = self.mapToScene(event.pos())
-            if self.snap_manager:
-                snapped_pos = self.snap_manager.snap_point(self, event.pos())
-                tooltip_text = f"{self.tool}: ({snapped_pos.x():.2f}, {snapped_pos.y():.2f})"
+            if snap_name:
+                tooltip_text = f"{self.tool}: ({snapped_pos.x():.2f}, {snapped_pos.y():.2f}) [{snap_name}]"
             else:
-                tooltip_text = f"{self.tool}: ({scene_pos.x():.2f}, {scene_pos.y():.2f})"
+                tooltip_text = f"{self.tool}: ({snapped_pos.x():.2f}, {snapped_pos.y():.2f})"
             
             self.tooltip_item.setText(tooltip_text)
-            self.tooltip_item.setPos(scene_pos.x() + 5, scene_pos.y() - 10)
+            self.tooltip_item.setPos(snapped_pos.x() + 5, snapped_pos.y() - 10)
         else:
             if self.tooltip_item:
                 self.scene().removeItem(self.tooltip_item)
                 self.tooltip_item = None
+            
+            # В режиме выбора показываем имя объекта под курсором
+            pos = scene_pos
+            item = self.scene().itemAt(pos, QTransform())
+            if item and item.flags() & QGraphicsItem.ItemIsSelectable:
+                # Находим соответствующий объект
+                for obj in self.parent_window.obj_map.values():
+                    if obj.graphics_item == item:
+                        if self.tooltip_item is None:
+                            self.tooltip_item = QGraphicsSimpleTextItem()
+                            self.tooltip_item.setBrush(QBrush(QColor(0,0,255)))
+                            self.tooltip_item.setFont(QFont("Arial", 9, QFont.Bold))
+                            self.scene().addItem(self.tooltip_item)
+                        
+                        obj_name = self.parent_window.object_description(obj)
+                        self.tooltip_item.setText(f"{obj_name}")
+                        self.tooltip_item.setPos(pos.x() + 10, pos.y() + 10)
+                        break
 
         # Подсветка объектов в режиме выбора
         if self.tool == "Select":
-            pos = self.mapToScene(event.pos())
+            pos = scene_pos
             item = self.scene().itemAt(pos, QTransform())
             if item != self.hovered_item:
                 self.clear_highlight()
@@ -467,9 +506,7 @@ class CadView(QGraphicsView):
 
         # Обработка перемещения для временных объектов
         if self.start_point and self.temp_item:
-            pos = self.mapToScene(event.pos())
-            if self.snap_manager:
-                pos = self.snap_manager.snap_point(self, event.pos())
+            pos = snapped_pos if self.snap_manager else scene_pos
             if self.tool == "Line":
                 self.temp_item.setLine(QLineF(self.start_point, pos))
             elif self.tool == "Circle":

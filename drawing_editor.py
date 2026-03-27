@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QGraphicsView, QGraphics
                              QGraphicsItemGroup, QInputDialog, QColorDialog, QComboBox,
                              QMenu, QGraphicsSimpleTextItem, QCheckBox, QGroupBox, QHBoxLayout)
 from PyQt5.QtPrintSupport import QPrinter, QPrintDialog
-from PyQt5.QtCore import Qt, QRectF, QPointF, QLineF, QMarginsF
+from PyQt5.QtCore import Qt, QRectF, QPointF, QLineF, QMarginsF, QSizeF
 from PyQt5.QtGui import QPen, QBrush, QColor, QFont, QPainterPath, QPolygonF, QPainter, QTransform, QPageLayout, QPageSize
 import ezdxf
 from ezdxf.math import Vec3

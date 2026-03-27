@@ -138,13 +138,22 @@ class GeometryEngine:
 
     @staticmethod
     def circle_circle_intersection(c1: CircleObject, c2: CircleObject) -> List[GeometryPoint]:
-        """Calculates intersection points between two circles."""
-        d2 = (c1.cx - c2.cx)**2 + (c1.cy - c2.cy)**2
-        d = math.sqrt(d2)
+        """Calculates intersection points between two circles.
         
-        if d > c1.radius + c2.radius or d < abs(c1.radius - c2.radius) or d == 0:
+        Optimized: Uses squared distance comparisons to avoid unnecessary sqrt calls.
+        """
+        d2 = (c1.cx - c2.cx)**2 + (c1.cy - c2.cy)**2
+        
+        # Early rejection using squared distances (avoids sqrt)
+        r_sum = c1.radius + c2.radius
+        r_diff = abs(c1.radius - c2.radius)
+        
+        # Check if circles are too far apart or one inside another
+        if d2 > r_sum ** 2 or d2 < r_diff ** 2 or d2 == 0:
             return []
 
+        # Now we need sqrt for actual intersection calculation
+        d = math.sqrt(d2)
         a = (c1.radius**2 - c2.radius**2 + d2) / (2 * d)
         h = math.sqrt(max(0, c1.radius**2 - a**2))
 
@@ -286,6 +295,10 @@ class GeometryEngine:
         Finds the nearest snap point among all provided shapes.
         Checks standard shape points AND intersection points between shapes.
         
+        Optimized version with:
+        - Early bounding box rejection for intersection checks
+        - Cached method references for hot paths
+        
         Args:
             query_x, query_y: The mouse cursor position.
             shapes: List of all shapes in the scene.
@@ -298,25 +311,40 @@ class GeometryEngine:
         threshold_sq = cls.SNAP_THRESHOLD ** 2
 
         # 1. Check standard anchor points (endpoints, centers, etc.)
+        get_snapping_points = cls.get_snapping_points
         for shape in shapes:
             if shape == exclude_shape:
                 continue
-            for pt in cls.get_snapping_points(shape):
+            for pt in get_snapping_points(shape):
                 dist_sq = (pt.x - query_x)**2 + (pt.y - query_y)**2
                 if dist_sq <= threshold_sq:
                     candidates.append((pt, dist_sq))
 
         # 2. Check intersection points between pairs of shapes
-        # This is computationally heavier (O(N^2)), so we do it carefully
+        # OPTIMIZED: Use bounding box check before expensive intersection calculation
         n = len(shapes)
+        find_intersections = cls.find_intersections
+        get_bounds = cls.get_shape_bounds
+        
         for i in range(n):
-            if shapes[i] == exclude_shape:
+            shape_i = shapes[i]
+            if shape_i == exclude_shape:
                 continue
+            
+            # Get bounds for early rejection
+            bounds_i = get_bounds(shape_i)
+            
             for j in range(i + 1, n):
-                if shapes[j] == exclude_shape:
+                shape_j = shapes[j]
+                if shape_j == exclude_shape:
                     continue
                 
-                intersections = cls.find_intersections(shapes[i], shapes[j])
+                # Early bounding box rejection (avoid expensive intersection calc)
+                bounds_j = get_bounds(shape_j)
+                if not cls._bounds_overlap(bounds_i, bounds_j, cls.SNAP_THRESHOLD * 2):
+                    continue
+                
+                intersections = find_intersections(shape_i, shape_j)
                 for res in intersections:
                     dist_sq = (res.point.x - query_x)**2 + (res.point.y - query_y)**2
                     if dist_sq <= threshold_sq:
@@ -328,3 +356,25 @@ class GeometryEngine:
         # Return the closest candidate
         candidates.sort(key=lambda x: x[1])
         return candidates[0][0]
+
+    @staticmethod
+    def _bounds_overlap(bounds_a: Tuple[float, float, float, float], 
+                        bounds_b: Tuple[float, float, float, float],
+                        margin: float = 0.0) -> bool:
+        """Check if two bounding boxes overlap with optional margin.
+        
+        Args:
+            bounds_a: (min_x, min_y, max_x, max_y) for first shape
+            bounds_b: (min_x, min_y, max_x, max_y) for second shape
+            margin: Extra margin around bounds for overlap check
+            
+        Returns:
+            True if bounds overlap, False otherwise
+        """
+        min_x_a, min_y_a, max_x_a, max_y_a = bounds_a
+        min_x_b, min_y_b, max_x_b, max_y_b = bounds_b
+        
+        return not (max_x_a + margin < min_x_b - margin or
+                    max_x_b + margin < min_x_a - margin or
+                    max_y_a + margin < min_y_b - margin or
+                    max_y_b + margin < min_y_a - margin)

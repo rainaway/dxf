@@ -9,11 +9,20 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QGraphicsView, QGraphics
                              QGraphicsTextItem, QGraphicsRectItem, QGraphicsPolygonItem,
                              QGraphicsItemGroup, QInputDialog, QColorDialog, QComboBox,
                              QMenu, QGraphicsSimpleTextItem, QCheckBox, QGroupBox, QHBoxLayout)
-from PyQt5.QtCore import Qt, QRectF, QPointF, QLineF
+from PyQt5.QtCore import Qt, QRectF, QPointF, QLineF, QSizeF
 from PyQt5.QtGui import QPen, QBrush, QColor, QFont, QPainterPath, QPolygonF, QPainter, QTransform
-from PyQt5.QtPrintSupport import QPrinter, QPrintDialog
+from PyQt5.QtPrintSupport import QPrinter, QPrintDialog, QPageSetupDialog
 import ezdxf
 from ezdxf.math import Vec3
+
+# Paper sizes in mm (ISO 216)
+PAPER_SIZES = {
+    "A0": (841, 1189),
+    "A1": (594, 841),
+    "A2": (420, 594),
+    "A3": (297, 420),
+    "A4": (210, 297),
+}
 
 # ------------------ Модель данных ------------------
 class GraphicObject:
@@ -279,6 +288,10 @@ class SnapManager:
         self.snap_distance = 40
         self.snap_to_endpoints = True
         self.snap_to_center = True
+        self.snap_to_midpoint = True
+        self.snap_to_tangent = False
+        self.snap_to_perpendicular = False
+        self.snap_to_intersection = True
 
     def get_snap_info(self, view, screen_pos):
         if not self.scene:
@@ -286,7 +299,9 @@ class SnapManager:
         best_dist = self.snap_distance
         best_point = None
         best_hint = None
+        
         for item in self.scene.items():
+            # Endpoint snaps
             if self.snap_to_endpoints:
                 if isinstance(item, GraphicsLine):
                     line = item.line()
@@ -314,6 +329,21 @@ class SnapManager:
                         best_dist = dist
                         best_point = p
                         best_hint = "Point"
+                elif isinstance(item, GraphicsArc):
+                    # Arc endpoints
+                    path = item.path()
+                    if not path.isEmpty():
+                        start_point = path.pointAtPercent(0)
+                        end_point = path.pointAtPercent(1)
+                        for p in [start_point, end_point]:
+                            pixel_pos = view.mapFromScene(p)
+                            dist = (screen_pos - pixel_pos).manhattanLength()
+                            if dist < best_dist:
+                                best_dist = dist
+                                best_point = p
+                                best_hint = "End"
+            
+            # Center snap
             if self.snap_to_center and isinstance(item, GraphicsCircle):
                 p = QPointF(item.circle_obj.cx, item.circle_obj.cy)
                 pixel_pos = view.mapFromScene(p)
@@ -322,7 +352,216 @@ class SnapManager:
                     best_dist = dist
                     best_point = p
                     best_hint = "Center"
+            
+            # Midpoint snaps
+            if self.snap_to_midpoint:
+                if isinstance(item, GraphicsLine):
+                    line = item.line()
+                    mid = (line.p1() + line.p2()) / 2
+                    pixel_pos = view.mapFromScene(mid)
+                    dist = (screen_pos - pixel_pos).manhattanLength()
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_point = mid
+                        best_hint = "Mid"
+                elif isinstance(item, GraphicsRect):
+                    rect = item.rect()
+                    # Midpoints of rectangle sides
+                    midpoints = [
+                        QPointF(rect.center().x(), rect.top()),
+                        QPointF(rect.center().x(), rect.bottom()),
+                        QPointF(rect.left(), rect.center().y()),
+                        QPointF(rect.right(), rect.center().y()),
+                    ]
+                    for p in midpoints:
+                        pixel_pos = view.mapFromScene(p)
+                        dist = (screen_pos - pixel_pos).manhattanLength()
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_point = p
+                            best_hint = "Mid"
+            
+            # Tangent snap for circles and arcs
+            if self.snap_to_tangent:
+                if isinstance(item, (GraphicsCircle, GraphicsArc)):
+                    tangent_point = self._find_tangent_point(view, screen_pos, item)
+                    if tangent_point:
+                        pixel_pos = view.mapFromScene(tangent_point)
+                        dist = (screen_pos - pixel_pos).manhattanLength()
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_point = tangent_point
+                            best_hint = "Tan"
+            
+            # Perpendicular snap
+            if self.snap_to_perpendicular:
+                perp_point = self._find_perpendicular_point(view, screen_pos, item)
+                if perp_point:
+                    pixel_pos = view.mapFromScene(perp_point)
+                    dist = (screen_pos - pixel_pos).manhattanLength()
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_point = perp_point
+                        best_hint = "Perp"
+            
+            # Intersection snap
+            if self.snap_to_intersection:
+                intersections = self._find_intersections_near(view, screen_pos)
+                for p in intersections:
+                    pixel_pos = view.mapFromScene(p)
+                    dist = (screen_pos - pixel_pos).manhattanLength()
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_point = p
+                        best_hint = "Int"
+        
         return best_point, best_hint
+    
+    def _find_tangent_point(self, view, screen_pos, item):
+        """Find tangent point on circle/arc from mouse position."""
+        scene_pos = view.mapToScene(screen_pos)
+        if isinstance(item, GraphicsCircle):
+            center = QPointF(item.circle_obj.cx, item.circle_obj.cy)
+            radius = item.circle_obj.radius
+            dx = scene_pos.x() - center.x()
+            dy = scene_pos.y() - center.y()
+            dist = math.hypot(dx, dy)
+            if dist > radius:
+                angle = math.atan2(dy, dx)
+                tx = center.x() + radius * math.cos(angle)
+                ty = center.y() + radius * math.sin(angle)
+                return QPointF(tx, ty)
+        elif isinstance(item, GraphicsArc):
+            # Simplified tangent for arc - treat as full circle
+            center = QPointF(item.arc_obj.cx, item.arc_obj.cy)
+            radius = item.arc_obj.radius
+            dx = scene_pos.x() - center.x()
+            dy = scene_pos.y() - center.y()
+            dist = math.hypot(dx, dy)
+            if dist > radius:
+                angle = math.atan2(dy, dx)
+                tx = center.x() + radius * math.cos(angle)
+                ty = center.y() + radius * math.sin(angle)
+                return QPointF(tx, ty)
+        return None
+    
+    def _find_perpendicular_point(self, view, screen_pos, item):
+        """Find perpendicular projection point on line/rectangle edge."""
+        scene_pos = view.mapToScene(screen_pos)
+        if isinstance(item, GraphicsLine):
+            line = item.line()
+            p1, p2 = line.p1(), line.p2()
+            dx = p2.x() - p1.x()
+            dy = p2.y() - p1.y()
+            if dx == 0 and dy == 0:
+                return p1
+            t = ((scene_pos.x() - p1.x()) * dx + (scene_pos.y() - p1.y()) * dy) / (dx*dx + dy*dy)
+            t = max(0, min(1, t))  # Clamp to segment
+            px = p1.x() + t * dx
+            py = p1.y() + t * dy
+            return QPointF(px, py)
+        elif isinstance(item, GraphicsRect):
+            rect = item.rect()
+            edges = [
+                (rect.topLeft(), rect.topRight()),
+                (rect.topRight(), rect.bottomRight()),
+                (rect.bottomRight(), rect.bottomLeft()),
+                (rect.bottomLeft(), rect.topLeft()),
+            ]
+            best_perp = None
+            best_dist = float('inf')
+            for p1, p2 in edges:
+                dx = p2.x() - p1.x()
+                dy = p2.y() - p1.y()
+                if dx == 0 and dy == 0:
+                    continue
+                t = ((scene_pos.x() - p1.x()) * dx + (scene_pos.y() - p1.y()) * dy) / (dx*dx + dy*dy)
+                t = max(0, min(1, t))
+                px = p1.x() + t * dx
+                py = p1.y() + t * dy
+                dist = math.hypot(scene_pos.x() - px, scene_pos.y() - py)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_perp = QPointF(px, py)
+            return best_perp
+        return None
+    
+    def _find_intersections_near(self, view, screen_pos):
+        """Find intersection points near the mouse position."""
+        scene_pos = view.mapToScene(screen_pos)
+        intersections = []
+        items = list(self.scene.items())
+        
+        for i, item1 in enumerate(items):
+            for item2 in items[i+1:]:
+                pts = self._get_item_intersections(item1, item2)
+                for p in pts:
+                    if math.hypot(p.x() - scene_pos.x(), p.y() - scene_pos.y()) < 50:
+                        intersections.append(p)
+        return intersections
+    
+    def _get_item_intersections(self, item1, item2):
+        """Get intersection points between two items."""
+        intersections = []
+        
+        # Line-Line intersection
+        if isinstance(item1, GraphicsLine) and isinstance(item2, GraphicsLine):
+            l1 = item1.line()
+            l2 = item2.line()
+            pt = self._line_line_intersection(l1.p1(), l1.p2(), l2.p1(), l2.p2())
+            if pt:
+                intersections.append(pt)
+        
+        # Line-Rect intersection (check all edges)
+        if isinstance(item1, GraphicsLine) and isinstance(item2, GraphicsRect):
+            rect = item2.rect()
+            edges = [
+                (rect.topLeft(), rect.topRight()),
+                (rect.topRight(), rect.bottomRight()),
+                (rect.bottomRight(), rect.bottomLeft()),
+                (rect.bottomLeft(), rect.topLeft()),
+            ]
+            line = item1.line()
+            for p1, p2 in edges:
+                pt = self._line_line_intersection(line.p1(), line.p2(), p1, p2)
+                if pt:
+                    intersections.append(pt)
+        
+        if isinstance(item1, GraphicsRect) and isinstance(item2, GraphicsLine):
+            rect = item1.rect()
+            edges = [
+                (rect.topLeft(), rect.topRight()),
+                (rect.topRight(), rect.bottomRight()),
+                (rect.bottomRight(), rect.bottomLeft()),
+                (rect.bottomLeft(), rect.topLeft()),
+            ]
+            line = item2.line()
+            for p1, p2 in edges:
+                pt = self._line_line_intersection(p1, p2, line.p1(), line.p2())
+                if pt:
+                    intersections.append(pt)
+        
+        return intersections
+    
+    def _line_line_intersection(self, p1, p2, p3, p4):
+        """Calculate intersection point of two line segments."""
+        x1, y1 = p1.x(), p1.y()
+        x2, y2 = p2.x(), p2.y()
+        x3, y3 = p3.x(), p3.y()
+        x4, y4 = p4.x(), p4.y()
+        
+        denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+        if abs(denom) < 1e-10:
+            return None
+        
+        t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom
+        u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / denom
+        
+        if 0 <= t <= 1 and 0 <= u <= 1:
+            x = x1 + t * (x2 - x1)
+            y = y1 + t * (y2 - y1)
+            return QPointF(x, y)
+        return None
 
     def snap_point(self, view, screen_pos):
         point, _ = self.get_snap_info(view, screen_pos)
@@ -533,11 +772,55 @@ class CadView(QGraphicsView):
 
     def set_snap_endpoints(self, enabled):
         self.snap_manager.snap_to_endpoints = enabled
-        self.parent_window.update_snap_settings(enabled, self.snap_manager.snap_to_center)
+        self.parent_window.update_snap_settings(enabled, self.snap_manager.snap_to_center,
+                                                 self.snap_manager.snap_to_midpoint,
+                                                 self.snap_manager.snap_to_intersection,
+                                                 self.snap_manager.snap_to_tangent,
+                                                 self.snap_manager.snap_to_perpendicular)
 
     def set_snap_center(self, enabled):
         self.snap_manager.snap_to_center = enabled
-        self.parent_window.update_snap_settings(self.snap_manager.snap_to_endpoints, enabled)
+        self.parent_window.update_snap_settings(self.snap_manager.snap_to_endpoints, enabled,
+                                                 self.snap_manager.snap_to_midpoint,
+                                                 self.snap_manager.snap_to_intersection,
+                                                 self.snap_manager.snap_to_tangent,
+                                                 self.snap_manager.snap_to_perpendicular)
+
+    def set_snap_midpoint(self, enabled):
+        self.snap_manager.snap_to_midpoint = enabled
+        self.parent_window.update_snap_settings(self.snap_manager.snap_to_endpoints,
+                                                 self.snap_manager.snap_to_center,
+                                                 enabled,
+                                                 self.snap_manager.snap_to_intersection,
+                                                 self.snap_manager.snap_to_tangent,
+                                                 self.snap_manager.snap_to_perpendicular)
+
+    def set_snap_intersection(self, enabled):
+        self.snap_manager.snap_to_intersection = enabled
+        self.parent_window.update_snap_settings(self.snap_manager.snap_to_endpoints,
+                                                 self.snap_manager.snap_to_center,
+                                                 self.snap_manager.snap_to_midpoint,
+                                                 enabled,
+                                                 self.snap_manager.snap_to_tangent,
+                                                 self.snap_manager.snap_to_perpendicular)
+
+    def set_snap_tangent(self, enabled):
+        self.snap_manager.snap_to_tangent = enabled
+        self.parent_window.update_snap_settings(self.snap_manager.snap_to_endpoints,
+                                                 self.snap_manager.snap_to_center,
+                                                 self.snap_manager.snap_to_midpoint,
+                                                 self.snap_manager.snap_to_intersection,
+                                                 enabled,
+                                                 self.snap_manager.snap_to_perpendicular)
+
+    def set_snap_perpendicular(self, enabled):
+        self.snap_manager.snap_to_perpendicular = enabled
+        self.parent_window.update_snap_settings(self.snap_manager.snap_to_endpoints,
+                                                 self.snap_manager.snap_to_center,
+                                                 self.snap_manager.snap_to_midpoint,
+                                                 self.snap_manager.snap_to_intersection,
+                                                 self.snap_manager.snap_to_tangent,
+                                                 enabled)
 
     def highlight_item(self, item):
         if hasattr(item, 'pen'):
@@ -692,6 +975,10 @@ class CadWindow(QMainWindow):
         self.setWindowTitle("DXF Editor")
         self.setGeometry(100, 100, 1200, 800)
 
+        # Paper settings
+        self.current_paper = "A4"
+        self.paper_landscape = True
+        
         self.scene = QGraphicsScene()
         self.scene.setBackgroundBrush(QBrush(QColor(255,255,255)))
         self.view = CadView(self)
@@ -706,6 +993,7 @@ class CadWindow(QMainWindow):
         self.init_ui()
         self.init_statusbar()
         self.create_empty_document()
+        self.update_paper_bounds()
 
     def init_ui(self):
         toolbar = self.addToolBar("Tools")
@@ -782,6 +1070,25 @@ class CadWindow(QMainWindow):
         container_right = QWidget()
         layout_right = QVBoxLayout(container_right)
 
+        # Paper settings group
+        paper_group = QGroupBox("Paper Settings")
+        paper_layout = QFormLayout()
+        
+        self.paper_size_combo = QComboBox()
+        self.paper_size_combo.addItems(["A0", "A1", "A2", "A3", "A4"])
+        self.paper_size_combo.setCurrentText("A4")
+        self.paper_size_combo.currentTextChanged.connect(self.on_paper_size_changed)
+        paper_layout.addRow("Size:", self.paper_size_combo)
+        
+        self.paper_orientation_combo = QComboBox()
+        self.paper_orientation_combo.addItems(["Landscape", "Portrait"])
+        self.paper_orientation_combo.setCurrentText("Landscape")
+        self.paper_orientation_combo.currentTextChanged.connect(self.on_paper_orientation_changed)
+        paper_layout.addRow("Orientation:", self.paper_orientation_combo)
+        
+        paper_group.setLayout(paper_layout)
+        layout_right.addWidget(paper_group)
+
         snap_group = QGroupBox("Snap Settings")
         snap_layout = QVBoxLayout()
         self.snap_end_check = QCheckBox("Snap to endpoints")
@@ -790,8 +1097,24 @@ class CadWindow(QMainWindow):
         self.snap_center_check = QCheckBox("Snap to centers")
         self.snap_center_check.setChecked(True)
         self.snap_center_check.toggled.connect(self.on_snap_center_toggled)
+        self.snap_mid_check = QCheckBox("Snap to midpoints")
+        self.snap_mid_check.setChecked(True)
+        self.snap_mid_check.toggled.connect(self.on_snap_mid_toggled)
+        self.snap_int_check = QCheckBox("Snap to intersections")
+        self.snap_int_check.setChecked(True)
+        self.snap_int_check.toggled.connect(self.on_snap_int_toggled)
+        self.snap_tan_check = QCheckBox("Snap to tangent")
+        self.snap_tan_check.setChecked(False)
+        self.snap_tan_check.toggled.connect(self.on_snap_tan_toggled)
+        self.snap_perp_check = QCheckBox("Snap to perpendicular")
+        self.snap_perp_check.setChecked(False)
+        self.snap_perp_check.toggled.connect(self.on_snap_perp_toggled)
         snap_layout.addWidget(self.snap_end_check)
         snap_layout.addWidget(self.snap_center_check)
+        snap_layout.addWidget(self.snap_mid_check)
+        snap_layout.addWidget(self.snap_int_check)
+        snap_layout.addWidget(self.snap_tan_check)
+        snap_layout.addWidget(self.snap_perp_check)
         snap_group.setLayout(snap_layout)
         layout_right.addWidget(snap_group)
 
@@ -846,6 +1169,30 @@ class CadWindow(QMainWindow):
         self.setStatusBar(self.status)
         self.status_label = QLabel("Ready")
         self.status.addWidget(self.status_label)
+    
+    def update_paper_bounds(self):
+        """Update the scene rect to show paper bounds."""
+        width_mm, height_mm = PAPER_SIZES.get(self.current_paper, PAPER_SIZES["A4"])
+        if self.paper_landscape:
+            width_mm, height_mm = height_mm, width_mm
+        
+        # Convert mm to scene units (1 unit = 1mm)
+        scene_rect = QRectF(-width_mm/2, -height_mm/2, width_mm, height_mm)
+        self.scene.setSceneRect(scene_rect)
+        
+        # Draw paper border
+        for item in self.scene.items():
+            if isinstance(item, QGraphicsRectItem) and hasattr(item, '_is_paper_border'):
+                self.scene.removeItem(item)
+        
+        border = QGraphicsRectItem(scene_rect)
+        border._is_paper_border = True
+        border.setPen(QPen(QColor(200, 200, 200), 0.5, Qt.DashLine))
+        border.setFlag(QGraphicsItem.ItemIsSelectable, False)
+        border.setZValue(-1000)
+        self.scene.addItem(border)
+        
+        self.status_label.setText(f"Paper: {self.current_paper} {'(Landscape)' if self.paper_landscape else '(Portrait)'}")
 
     def create_empty_document(self):
         self.dxf_doc = ezdxf.new('R2010')
@@ -855,7 +1202,8 @@ class CadWindow(QMainWindow):
         self.list_widget.clear()
         self.obj_map.clear()
         self.status_label.setText("New document (unsaved)")
-        self.view.fitInView(self.scene.itemsBoundingRect(), Qt.KeepAspectRatio)
+        self.update_paper_bounds()
+        self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
 
     def set_tool(self, tool):
         self.view.set_tool(tool)
@@ -864,19 +1212,55 @@ class CadWindow(QMainWindow):
     def on_dim_type_changed(self, text):
         self.view.dim_type = text
 
+    def on_paper_size_changed(self, text):
+        self.current_paper = text
+        self.update_paper_bounds()
+
+    def on_paper_orientation_changed(self, text):
+        self.paper_landscape = (text == "Landscape")
+        self.update_paper_bounds()
+
     def on_snap_end_toggled(self, checked):
         self.view.set_snap_endpoints(checked)
 
     def on_snap_center_toggled(self, checked):
         self.view.set_snap_center(checked)
 
-    def update_snap_settings(self, snap_end, snap_center):
+    def on_snap_mid_toggled(self, checked):
+        self.view.set_snap_midpoint(checked)
+
+    def on_snap_int_toggled(self, checked):
+        self.view.set_snap_intersection(checked)
+
+    def on_snap_tan_toggled(self, checked):
+        self.view.set_snap_tangent(checked)
+
+    def on_snap_perp_toggled(self, checked):
+        self.view.set_snap_perpendicular(checked)
+
+    def update_snap_settings(self, snap_end, snap_center, snap_mid=None, snap_int=None, snap_tan=None, snap_perp=None):
         self.snap_end_check.blockSignals(True)
         self.snap_center_check.blockSignals(True)
         self.snap_end_check.setChecked(snap_end)
         self.snap_center_check.setChecked(snap_center)
         self.snap_end_check.blockSignals(False)
         self.snap_center_check.blockSignals(False)
+        if snap_mid is not None:
+            self.snap_mid_check.blockSignals(True)
+            self.snap_mid_check.setChecked(snap_mid)
+            self.snap_mid_check.blockSignals(False)
+        if snap_int is not None:
+            self.snap_int_check.blockSignals(True)
+            self.snap_int_check.setChecked(snap_int)
+            self.snap_int_check.blockSignals(False)
+        if snap_tan is not None:
+            self.snap_tan_check.blockSignals(True)
+            self.snap_tan_check.setChecked(snap_tan)
+            self.snap_tan_check.blockSignals(False)
+        if snap_perp is not None:
+            self.snap_perp_check.blockSignals(True)
+            self.snap_perp_check.setChecked(snap_perp)
+            self.snap_perp_check.blockSignals(False)
 
     def choose_line_color(self):
         color = QColorDialog.getColor()
@@ -1053,10 +1437,15 @@ class CadWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Save failed:\n{str(e)}")
 
     def export_pdf(self):
-        """Экспорт текущей сцены в PDF с масштабированием."""
-        if not self.scene.items():
+        """Export current scene to PDF with paper size settings."""
+        # Get all items except paper border
+        drawing_items = [item for item in self.scene.items() 
+                        if not (isinstance(item, QGraphicsRectItem) and hasattr(item, '_is_paper_border'))]
+        
+        if not drawing_items:
             QMessageBox.warning(self, "Warning", "Nothing to export.")
             return
+        
         fname, _ = QFileDialog.getSaveFileName(self, "Export PDF", "", "PDF Files (*.pdf)")
         if not fname:
             return
@@ -1064,10 +1453,29 @@ class CadWindow(QMainWindow):
         printer = QPrinter(QPrinter.HighResolution)
         printer.setOutputFormat(QPrinter.PdfFormat)
         printer.setOutputFileName(fname)
-        printer.setPageSize(QPrinter.A4)
-        printer.setOrientation(QPrinter.Landscape)
-
+        
+        # Set paper size based on current selection
+        width_mm, height_mm = PAPER_SIZES.get(self.current_paper, PAPER_SIZES["A4"])
+        if self.paper_landscape:
+            width_mm, height_mm = height_mm, width_mm
+            printer.setOrientation(QPrinter.Landscape)
+        else:
+            printer.setOrientation(QPrinter.Portrait)
+        
+        # Set custom page size in points (1 mm = 2.83465 points)
+        printer.setPageSize(QPrinter.A4)  # Default, will be overridden by custom rect
+        
         bbox = self.scene.itemsBoundingRect()
+        # Exclude paper border from bounding box calculation
+        for item in self.scene.items():
+            if isinstance(item, QGraphicsRectItem) and hasattr(item, '_is_paper_border'):
+                continue
+            item_bbox = item.sceneBoundingRect()
+            if bbox.isEmpty():
+                bbox = item_bbox
+            else:
+                bbox = bbox.united(item_bbox)
+        
         if bbox.isEmpty():
             QMessageBox.warning(self, "Warning", "Empty drawing.")
             return
@@ -1075,16 +1483,34 @@ class CadWindow(QMainWindow):
         painter = QPainter(printer)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        page_rect = printer.pageRect()
-        scale_x = page_rect.width() / bbox.width()
-        scale_y = page_rect.height() / bbox.height()
-        scale = min(scale_x, scale_y) * 0.9
+        # Get the actual page rectangle in points
+        page_rect = printer.pageRect(QPrinter.DevicePixel)
+        
+        # Calculate scale to fit drawing on page with margins
+        margin = 20  # mm margin
+        available_width = width_mm - 2 * margin
+        available_height = height_mm - 2 * margin
+        
+        # Convert bbox to mm if needed (assuming scene units are mm)
+        draw_width = bbox.width()
+        draw_height = bbox.height()
+        
+        if draw_width > 0 and draw_height > 0:
+            scale_x = available_width / draw_width
+            scale_y = available_height / draw_height
+            scale = min(scale_x, scale_y)
+        else:
+            scale = 1.0
 
+        # Center the drawing on the page
         painter.translate(page_rect.center())
         painter.scale(scale, scale)
         painter.translate(-bbox.center())
 
-        self.scene.render(painter)
+        # Render only drawing items (not paper border)
+        for item in drawing_items:
+            item.paint(painter, None, None)
+        
         painter.end()
 
         QMessageBox.information(self, "Exported", f"PDF saved to {fname}")

@@ -713,7 +713,7 @@ class CadView(QGraphicsView):
         else:
             self.clear_highlight()
 
-        # Подсказка привязки
+        # Подсказка привязки - отображается справа от подсказки примитива
         if self.snap_manager and self.tool != "Select":
             point, hint = self.snap_manager.get_snap_info(self, event.pos())
             if point and hint:
@@ -724,7 +724,10 @@ class CadView(QGraphicsView):
                     self.hint_item.setZValue(10001)
                     self.scene().addItem(self.hint_item)
                 self.hint_item.setText(hint)
-                self.hint_item.setPos(point.x() + 10, point.y() - 20)
+                # Размещаем подсказку привязки справа от подсказки примитива, рядом с курсором
+                scene_pos = self.mapToScene(event.pos())
+                tooltip_width = self.tooltip_item.boundingRect().width() if self.tooltip_item else 0
+                self.hint_item.setPos(scene_pos.x() + 10 + tooltip_width + 5, scene_pos.y() - 20)
                 self.hint_item.show()
             else:
                 if self.hint_item:
@@ -1355,10 +1358,12 @@ class CadWindow(QMainWindow):
     def on_paper_size_changed(self, text):
         self.current_paper = text
         self.update_paper_bounds()
+        self.fit_content_to_window()
 
     def on_paper_orientation_changed(self, text):
         self.paper_landscape = (text == "Landscape")
         self.update_paper_bounds()
+        self.fit_content_to_window()
 
     def on_snap_end_toggled(self, checked):
         self.view.set_snap_endpoints(checked)
@@ -1579,79 +1584,82 @@ class CadWindow(QMainWindow):
 
     def export_pdf(self):
         """Export current scene to PDF with paper size settings."""
-        # First fit content to window to ensure proper scaling
-        self.fit_content_to_window()
-        
-        # Get all items except paper border
-        drawing_items = [item for item in self.scene.items() 
-                        if not (isinstance(item, QGraphicsRectItem) and hasattr(item, '_is_paper_border'))]
-        
-        if not drawing_items:
-            QMessageBox.warning(self, "Warning", "Nothing to export.")
-            return
-        
-        fname, _ = QFileDialog.getSaveFileName(self, "Export PDF", "", "PDF Files (*.pdf)")
-        if not fname:
-            return
+        try:
+            # First fit content to window to ensure proper scaling
+            self.fit_content_to_window()
+            
+            # Get all items except paper border
+            drawing_items = [item for item in self.scene.items() 
+                            if not (isinstance(item, QGraphicsRectItem) and hasattr(item, '_is_paper_border'))]
+            
+            if not drawing_items:
+                QMessageBox.warning(self, "Warning", "Nothing to export.")
+                return
+            
+            fname, _ = QFileDialog.getSaveFileName(self, "Export PDF", "", "PDF Files (*.pdf)")
+            if not fname:
+                return
 
-        printer = QPrinter(QPrinter.HighResolution)
-        printer.setOutputFormat(QPrinter.PdfFormat)
-        printer.setOutputFileName(fname)
-        
-        # Set paper size based on current selection
-        width_mm, height_mm = PAPER_SIZES.get(self.current_paper, PAPER_SIZES["A4"])
-        if self.paper_landscape:
-            width_mm, height_mm = height_mm, width_mm
-            printer.setOrientation(QPrinter.Landscape)
-        else:
-            printer.setOrientation(QPrinter.Portrait)
-        
-        # Set page size in millimeters
-        printer.setPageSizeMM(QSizeF(width_mm, height_mm))
-        
-        # Calculate bounding box of drawing items
-        bbox = drawing_items[0].sceneBoundingRect()
-        for item in drawing_items[1:]:
-            bbox = bbox.united(item.sceneBoundingRect())
-        
-        if bbox.isEmpty():
-            QMessageBox.warning(self, "Warning", "Empty drawing.")
-            return
+            printer = QPrinter(QPrinter.HighResolution)
+            printer.setOutputFormat(QPrinter.PdfFormat)
+            printer.setOutputFileName(fname)
+            
+            # Set paper size based on current selection
+            width_mm, height_mm = PAPER_SIZES.get(self.current_paper, PAPER_SIZES["A4"])
+            if self.paper_landscape:
+                width_mm, height_mm = height_mm, width_mm
+                printer.setOrientation(QPrinter.Landscape)
+            else:
+                printer.setOrientation(QPrinter.Portrait)
+            
+            # Set page size in millimeters
+            printer.setPageSizeMM(QSizeF(width_mm, height_mm))
+            
+            # Calculate bounding box of drawing items
+            bbox = drawing_items[0].sceneBoundingRect()
+            for item in drawing_items[1:]:
+                bbox = bbox.united(item.sceneBoundingRect())
+            
+            if bbox.isEmpty():
+                QMessageBox.warning(self, "Warning", "Empty drawing.")
+                return
 
-        painter = QPainter(printer)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setRenderHint(QPainter.TextAntialiasing)
+            painter = QPainter(printer)
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setRenderHint(QPainter.TextAntialiasing)
 
-        # Get the page rectangle in points
-        page_rect = printer.pageRect(QPrinter.DevicePixel)
-        
-        # Calculate scale to fit drawing on page with margins
-        margin = 20  # mm margin
-        available_width = width_mm - 2 * margin
-        available_height = height_mm - 2 * margin
-        
-        draw_width = bbox.width()
-        draw_height = bbox.height()
-        
-        if draw_width > 0 and draw_height > 0:
-            scale_x = available_width / draw_width
-            scale_y = available_height / draw_height
-            scale = min(scale_x, scale_y)
-        else:
-            scale = 1.0
+            # Get the page rectangle in device pixels
+            page_rect = printer.pageRect(QPrinter.DevicePixel)
+            
+            # Calculate scale to fit drawing on page with margins
+            margin = 20  # mm margin
+            available_width = width_mm - 2 * margin
+            available_height = height_mm - 2 * margin
+            
+            draw_width = bbox.width()
+            draw_height = bbox.height()
+            
+            if draw_width > 0 and draw_height > 0:
+                scale_x = available_width / draw_width
+                scale_y = available_height / draw_height
+                scale = min(scale_x, scale_y)
+            else:
+                scale = 1.0
 
-        # Apply transformations
-        painter.translate(page_rect.center())
-        painter.scale(scale, scale)
-        painter.translate(-bbox.center())
+            # Apply transformations
+            painter.translate(page_rect.center())
+            painter.scale(scale, scale)
+            painter.translate(-bbox.center())
 
-        # Render all drawing items using the view's render method
-        for item in drawing_items:
-            item.paint(painter, None, None)
-        
-        painter.end()
+            # Render the scene
+            self.scene.render(painter, target=QRectF(), source=bbox, aspectRatioMode=Qt.KeepAspectRatio)
+            
+            painter.end()
 
-        QMessageBox.information(self, "Exported", f"PDF saved to {fname}")
+            QMessageBox.information(self, "Exported", f"PDF saved to {fname}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to export PDF: {str(e)}")
+            traceback.print_exc()
 
     def export_html(self):
         """Export current scene to HTML file that works offline on any device."""

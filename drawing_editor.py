@@ -1052,42 +1052,42 @@ class CadWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Save failed:\n{str(e)}")
 
-def export_pdf(self):
-    """Экспорт текущей сцены в PDF с масштабированием."""
-    if not self.scene.items():
-        QMessageBox.warning(self, "Warning", "Nothing to export.")
-        return
-    fname, _ = QFileDialog.getSaveFileName(self, "Export PDF", "", "PDF Files (*.pdf)")
-    if not fname:
-        return
+    def export_pdf(self):
+        """Экспорт текущей сцены в PDF с масштабированием."""
+        if not self.scene.items():
+            QMessageBox.warning(self, "Warning", "Nothing to export.")
+            return
+        fname, _ = QFileDialog.getSaveFileName(self, "Export PDF", "", "PDF Files (*.pdf)")
+        if not fname:
+            return
 
-    printer = QPrinter(QPrinter.HighResolution)
-    printer.setOutputFormat(QPrinter.PdfFormat)
-    printer.setOutputFileName(fname)
-    printer.setPageSize(QPrinter.A4)
-    printer.setOrientation(QPrinter.Landscape)
+        printer = QPrinter(QPrinter.HighResolution)
+        printer.setOutputFormat(QPrinter.PdfFormat)
+        printer.setOutputFileName(fname)
+        printer.setPageSize(QPrinter.A4)
+        printer.setOrientation(QPrinter.Landscape)
 
-    bbox = self.scene.itemsBoundingRect()
-    if bbox.isEmpty():
-        QMessageBox.warning(self, "Warning", "Empty drawing.")
-        return
+        bbox = self.scene.itemsBoundingRect()
+        if bbox.isEmpty():
+            QMessageBox.warning(self, "Warning", "Empty drawing.")
+            return
 
-    painter = QPainter(printer)
-    painter.setRenderHint(QPainter.Antialiasing)
+        painter = QPainter(printer)
+        painter.setRenderHint(QPainter.Antialiasing)
 
-    page_rect = printer.pageRect()
-    scale_x = page_rect.width() / bbox.width()
-    scale_y = page_rect.height() / bbox.height()
-    scale = min(scale_x, scale_y) * 0.9
+        page_rect = printer.pageRect()
+        scale_x = page_rect.width() / bbox.width()
+        scale_y = page_rect.height() / bbox.height()
+        scale = min(scale_x, scale_y) * 0.9
 
-    painter.translate(page_rect.center())
-    painter.scale(scale, scale)
-    painter.translate(-bbox.center())
+        painter.translate(page_rect.center())
+        painter.scale(scale, scale)
+        painter.translate(-bbox.center())
 
-    self.scene.render(painter)
-    painter.end()
+        self.scene.render(painter)
+        painter.end()
 
-    QMessageBox.information(self, "Exported", f"PDF saved to {fname}")
+        QMessageBox.information(self, "Exported", f"PDF saved to {fname}")
 
     def _sync_dxf(self):
         for obj in self.obj_map.values():

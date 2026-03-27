@@ -34,7 +34,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QRectF, QPointF, QLineF
 from PyQt5.QtGui import QPen, QBrush, QColor, QFont, QPainter, QTransform
-from PyQt5.QtPrintSupport import QPrinter, QPageLayout, QPageSize
+from PyQt5.QtPrintSupport import QPrinter
 import ezdxf
 from ezdxf.math import Vec3
 import json
@@ -78,6 +78,16 @@ class CadWindow(QMainWindow):
         self.dxf_modelspace = None
         self.obj_map = {}
         self.current_file = None
+        
+        # Формат бумаги (по умолчанию A0)
+        self.paper_format = "A0"
+        self.paper_sizes = {
+            "A0": (1189, 841),   # мм
+            "A1": (841, 594),
+            "A2": (594, 420),
+            "A3": (420, 297),
+            "A4": (297, 210),
+        }
 
         self.init_ui()
         self.init_statusbar()
@@ -187,6 +197,17 @@ class CadWindow(QMainWindow):
         style_group.setLayout(style_layout)
         layout_right.addWidget(style_group)
 
+        # Выбор формата бумаги
+        paper_group = QGroupBox("Paper Format")
+        paper_layout = QFormLayout()
+        self.paper_format_combo = QComboBox()
+        self.paper_format_combo.addItems(["A0", "A1", "A2", "A3", "A4"])
+        self.paper_format_combo.setCurrentText("A0")
+        self.paper_format_combo.currentTextChanged.connect(self.on_paper_format_changed)
+        paper_layout.addRow("Format:", self.paper_format_combo)
+        paper_group.setLayout(paper_layout)
+        layout_right.addWidget(paper_group)
+
         apply_style_btn = QPushButton("Apply Style to Selected")
         apply_style_btn.clicked.connect(self.apply_style_to_selected)
         layout_right.addWidget(apply_style_btn)
@@ -234,6 +255,7 @@ class CadWindow(QMainWindow):
         self.list_widget.clear()
         self.obj_map.clear()
         self.status_label.setText("New document (unsaved)")
+        self.update_scene_rect()
         self.view.fitInView(self.scene.itemsBoundingRect(), Qt.KeepAspectRatio)
 
     def set_tool(self, tool):
@@ -256,6 +278,53 @@ class CadWindow(QMainWindow):
         self.snap_center_check.setChecked(snap_center)
         self.snap_end_check.blockSignals(False)
         self.snap_center_check.blockSignals(False)
+
+    def on_paper_format_changed(self, format_name):
+        """Изменение формата бумаги и центрирование объектов."""
+        self.paper_format = format_name
+        self.update_scene_rect()
+        if self.scene.items():
+            self.center_objects_in_viewport()
+
+    def get_paper_rect_mm(self):
+        """Получить прямоугольник области редактирования в мм."""
+        width_mm, height_mm = self.paper_sizes.get(self.paper_format, (1189, 841))
+        return QRectF(0, 0, width_mm, height_mm)
+
+    def update_scene_rect(self):
+        """Обновить размер сцены согласно формату бумаги."""
+        paper_rect = self.get_paper_rect_mm()
+        self.scene.setSceneRect(paper_rect)
+
+    def center_objects_in_viewport(self):
+        """Центрировать все объекты в центре области редактирования."""
+        if not self.scene.items():
+            return
+        
+        # Получить границы всех объектов
+        items_bbox = self.scene.itemsBoundingRect()
+        if items_bbox.isEmpty():
+            return
+        
+        # Получить текущую область редактирования
+        paper_rect = self.get_paper_rect_mm()
+        
+        # Вычислить центр области редактирования
+        paper_center = paper_rect.center()
+        
+        # Вычислить центр объектов
+        items_center = items_bbox.center()
+        
+        # Вычислить смещение для центрирования
+        dx = paper_center.x() - items_center.x()
+        dy = paper_center.y() - items_center.y()
+        
+        # Переместить все объекты
+        for item in self.scene.items():
+            item.moveBy(dx, dy)
+        
+        # Обновить отображение
+        self.view.fitInView(self.scene.itemsBoundingRect(), Qt.KeepAspectRatio)
 
     def choose_line_color(self):
         color = QColorDialog.getColor()
@@ -756,7 +825,10 @@ class CadWindow(QMainWindow):
             self.add_entity_to_scene(entity)
 
         if self.scene.items():
-            self.view.fitInView(self.scene.itemsBoundingRect(), Qt.KeepAspectRatio)
+            # Обновить область сцены согласно формату бумаги
+            self.update_scene_rect()
+            # Центрировать объекты в области редактирования
+            self.center_objects_in_viewport()
 
     def add_entity_to_scene(self, entity):
         try:

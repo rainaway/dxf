@@ -1,145 +1,57 @@
-"""
-DXF Drawing Editor - A PyQt5-based CAD application for viewing and editing DXF files.
-
-This module provides a graphical interface for creating, editing, and saving DXF drawings
-with support for various geometric primitives and dimensioning tools.
-"""
-
 import sys
 import math
 import traceback
-from typing import List, Optional, Dict, Any, Tuple
-
-from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
-    QFileDialog, QToolBar, QAction, QStatusBar, QVBoxLayout,
-    QWidget, QDockWidget, QListWidget, QPushButton, QDialog,
-    QFormLayout, QLineEdit, QMessageBox, QLabel, QGraphicsItem,
-    QGraphicsLineItem, QGraphicsEllipseItem, QGraphicsPathItem,
-    QGraphicsTextItem, QGraphicsRectItem, QGraphicsPolygonItem,
-    QGraphicsItemGroup, QInputDialog, QColorDialog, QComboBox,
-    QDoubleSpinBox, QCheckBox, QGroupBox, QRadioButton
-)
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
+                             QFileDialog, QToolBar, QAction, QStatusBar, QVBoxLayout,
+                             QWidget, QDockWidget, QListWidget, QPushButton, QDialog,
+                             QFormLayout, QLineEdit, QMessageBox, QLabel, QGraphicsItem,
+                             QGraphicsLineItem, QGraphicsEllipseItem, QGraphicsPathItem,
+                             QGraphicsTextItem, QGraphicsRectItem, QGraphicsPolygonItem,
+                             QGraphicsItemGroup, QInputDialog, QColorDialog, QComboBox,
+                             QMenu, QGraphicsSimpleTextItem, QCheckBox, QGroupBox, QHBoxLayout)
 from PyQt5.QtCore import Qt, QRectF, QPointF, QLineF
 from PyQt5.QtGui import QPen, QBrush, QColor, QFont, QPainterPath, QPolygonF, QPainter
-
 import ezdxf
 from ezdxf.math import Vec3
 
-
-# =============================================================================
-# CONSTANTS AND CONFIGURATION
-# =============================================================================
-
-LINE_STYLES = {
-    "Continuous": Qt.SolidLine,
-    "Dashed": Qt.DashLine,
-    "Dotted": Qt.DotLine,
-    "DashDot": Qt.DashDotLine,
-    "DashDotDot": Qt.DashDotDotLine,
-}
-
-DEFAULT_LINE_WIDTH = 0.2
-DEFAULT_POINT_SIZE = 0.2
-DEFAULT_TEXT_HEIGHT = 2.5
-DEFAULT_ARC_RADIUS = 10
-DIMENSION_OFFSET = 2
-SNAP_TOLERANCE = 10
-
-def get_qt_pen_from_dxf(entity, default_width: float = DEFAULT_LINE_WIDTH) -> QPen:
-    """Create a QPen from a DXF entity.
-    
-    Args:
-        entity: DXF entity to extract pen properties from.
-        default_width: Default line width if not specified in entity.
-    
-    Returns:
-        QPen configured with the entity's color, linetype, and linewidth.
-    """
-    # Get color (default: black)
-    color = QColor(0, 0, 0)
-    if hasattr(entity.dxf, 'color'):
-        col = entity.dxf.color
-        if col != 7:
-            # Simplified: use black for non-default colors
-            pass
-    
-    # Get linetype
-    linetype = "Continuous"
-    if hasattr(entity.dxf, 'linetype'):
-        linetype = entity.dxf.linetype
-    
-    # Get linewidth
-    width = default_width
-    if hasattr(entity.dxf, 'lineweight'):
-        lw = entity.dxf.lineweight
-        if lw > 0:
-            width = lw / 100.0
-    
-    # Create and return pen
-    pen = QPen(color, width)
-    pen.setStyle(LINE_STYLES.get(linetype, Qt.SolidLine))
-    return pen
-
-# =============================================================================
-# DATA MODELS FOR GRAPHIC OBJECTS
-# =============================================================================
-
+# ------------------ Модель данных для графических объектов ------------------
 class GraphicObject:
-    """Base class for graphic objects."""
-    
     def __init__(self, dxf_entity=None):
         self.dxf_entity = dxf_entity
         self.graphics_item = None
         self.type = ""
         self.params = {}
 
-
 class PointObject(GraphicObject):
-    """Represents a point in the drawing."""
-    
-    def __init__(self, x: float, y: float, dxf_entity=None):
+    def __init__(self, x, y, dxf_entity=None):
         super().__init__(dxf_entity)
         self.type = "Point"
         self.x = x
         self.y = y
 
-
 class LineObject(GraphicObject):
-    """Represents a line segment."""
-    
-    def __init__(self, x1: float, y1: float, x2: float, y2: float, dxf_entity=None):
+    def __init__(self, x1, y1, x2, y2, dxf_entity=None):
         super().__init__(dxf_entity)
         self.type = "Line"
         self.x1, self.y1 = x1, y1
         self.x2, self.y2 = x2, y2
 
-
 class CircleObject(GraphicObject):
-    """Represents a circle."""
-    
-    def __init__(self, cx: float, cy: float, radius: float, dxf_entity=None):
+    def __init__(self, cx, cy, radius, dxf_entity=None):
         super().__init__(dxf_entity)
         self.type = "Circle"
         self.cx, self.cy = cx, cy
         self.radius = radius
 
-
 class RectObject(GraphicObject):
-    """Represents a rectangle."""
-    
-    def __init__(self, x1: float, y1: float, x2: float, y2: float, dxf_entity=None):
+    def __init__(self, x1, y1, x2, y2, dxf_entity=None):
         super().__init__(dxf_entity)
         self.type = "Rectangle"
         self.x1, self.y1 = x1, y1
         self.x2, self.y2 = x2, y2
 
-
 class ArcObject(GraphicObject):
-    """Represents an arc."""
-    
-    def __init__(self, cx: float, cy: float, radius: float, 
-                 start_angle: float, end_angle: float, dxf_entity=None):
+    def __init__(self, cx, cy, radius, start_angle, end_angle, dxf_entity=None):
         super().__init__(dxf_entity)
         self.type = "Arc"
         self.cx, self.cy = cx, cy
@@ -147,46 +59,36 @@ class ArcObject(GraphicObject):
         self.start_angle = start_angle
         self.end_angle = end_angle
 
-
 class TextObject(GraphicObject):
-    """Represents text annotation."""
-    
-    def __init__(self, x: float, y: float, text: str, 
-                 height: float = DEFAULT_TEXT_HEIGHT, dxf_entity=None):
+    def __init__(self, x, y, text, height=2.5, dxf_entity=None):
         super().__init__(dxf_entity)
         self.type = "Text"
         self.x, self.y = x, y
         self.text = text
         self.height = height
 
-
 class DimensionObject(GraphicObject):
-    """Represents dimension annotations."""
-    
-    def __init__(self, dim_type: str, points: List[QPointF], 
-                 offset: float = DIMENSION_OFFSET, dxf_entity=None):
+    def __init__(self, p1, p2, offset=2, dim_type="Linear", dxf_entity=None):
         super().__init__(dxf_entity)
         self.type = "Dimension"
-        self.dim_type = dim_type  # "linear", "radius", "diameter", "angular"
-        self.points = points
+        self.dim_type = dim_type
+        self.p1 = p1
+        self.p2 = p2
         self.offset = offset
+        self.radius = None
+        self.diameter = None
+        self.angle = None
 
-# =============================================================================
-# GRAPHICS ITEMS (PYQT5 VISUAL REPRESENTATIONS)
-# =============================================================================
-
+# ------------------ Графические элементы PyQt ------------------
 class GraphicsPoint(QGraphicsEllipseItem):
-    """Graphics item representing a point."""
-    
-    def __init__(self, point_obj: PointObject, size: float = DEFAULT_POINT_SIZE):
+    def __init__(self, point_obj, size=0.2):
         super().__init__(-size/2, -size/2, size, size)
         self.point_obj = point_obj
         self.setPos(point_obj.x, point_obj.y)
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.ItemIsMovable, True)
-        self.setPen(QPen(QColor(0, 0, 0), 0.1))
 
-    def itemChange(self, change: QGraphicsItem.GraphicsItemChange, value):
+    def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionChange:
             self.point_obj.x = value.x()
             self.point_obj.y = value.y()
@@ -194,133 +96,73 @@ class GraphicsPoint(QGraphicsEllipseItem):
                 self.point_obj.dxf_entity.dxf.location = Vec3(value.x(), value.y(), 0)
         return super().itemChange(change, value)
 
-
 class GraphicsLine(QGraphicsLineItem):
-    """Graphics item representing a line segment."""
-    
-    def __init__(self, line_obj: LineObject):
+    def __init__(self, line_obj):
         super().__init__(line_obj.x1, line_obj.y1, line_obj.x2, line_obj.y2)
         self.line_obj = line_obj
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
-        self.update_pen()
-
-    def update_pen(self):
-        """Update pen style from DXF entity if available."""
-        if self.line_obj.dxf_entity:
-            pen = get_qt_pen_from_dxf(self.line_obj.dxf_entity)
-            self.setPen(pen)
-        else:
-            self.setPen(QPen(QColor(0, 0, 0), 0.2))
 
     def update_from_obj(self):
-        """Update line geometry from the model object."""
-        self.setLine(self.line_obj.x1, self.line_obj.y1, 
-                     self.line_obj.x2, self.line_obj.y2)
-        self.update_pen()
-
+        self.setLine(self.line_obj.x1, self.line_obj.y1, self.line_obj.x2, self.line_obj.y2)
 
 class GraphicsCircle(QGraphicsEllipseItem):
-    """Graphics item representing a circle."""
-    
-    def __init__(self, circle_obj: CircleObject):
-        super().__init__(circle_obj.cx - circle_obj.radius, 
-                         circle_obj.cy - circle_obj.radius,
-                         2 * circle_obj.radius, 2 * circle_obj.radius)
+    def __init__(self, circle_obj):
+        super().__init__(circle_obj.cx - circle_obj.radius, circle_obj.cy - circle_obj.radius,
+                         2*circle_obj.radius, 2*circle_obj.radius)
         self.circle_obj = circle_obj
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
-        self.update_pen()
-
-    def update_pen(self):
-        """Update pen style from DXF entity if available."""
-        if self.circle_obj.dxf_entity:
-            pen = get_qt_pen_from_dxf(self.circle_obj.dxf_entity)
-            self.setPen(pen)
-        else:
-            self.setPen(QPen(QColor(0, 0, 0), 0.2))
 
     def update_from_obj(self):
-        """Update circle geometry from the model object."""
         self.setRect(self.circle_obj.cx - self.circle_obj.radius,
                      self.circle_obj.cy - self.circle_obj.radius,
-                     2 * self.circle_obj.radius, 2 * self.circle_obj.radius)
-        self.update_pen()
-
+                     2*self.circle_obj.radius, 2*self.circle_obj.radius)
 
 class GraphicsRect(QGraphicsRectItem):
-    """Graphics item representing a rectangle."""
-    
-    def __init__(self, rect_obj: RectObject):
+    def __init__(self, rect_obj):
         x1, y1 = rect_obj.x1, rect_obj.y1
         x2, y2 = rect_obj.x2, rect_obj.y2
-        super().__init__(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
+        super().__init__(min(x1, x2), min(y1, y2), abs(x2-x1), abs(y2-y1))
         self.rect_obj = rect_obj
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
-        self.update_pen()
-
-    def update_pen(self):
-        """Update pen style from DXF entity if available."""
-        if self.rect_obj.dxf_entity:
-            pen = get_qt_pen_from_dxf(self.rect_obj.dxf_entity)
-            self.setPen(pen)
-        else:
-            self.setPen(QPen(QColor(0, 0, 0), 0.2))
 
     def update_from_obj(self):
-        """Update rectangle geometry from the model object."""
         x1, y1 = self.rect_obj.x1, self.rect_obj.y1
         x2, y2 = self.rect_obj.x2, self.rect_obj.y2
-        self.setRect(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
-        self.update_pen()
-
+        self.setRect(min(x1, x2), min(y1, y2), abs(x2-x1), abs(y2-y1))
 
 class GraphicsArc(QGraphicsPathItem):
-    """Graphics item representing an arc."""
-    
-    def __init__(self, arc_obj: ArcObject):
+    def __init__(self, arc_obj):
         super().__init__()
         self.arc_obj = arc_obj
         self.update_path()
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
-        self.update_pen()
-
-    def update_pen(self):
-        """Update pen style from DXF entity if available."""
-        if self.arc_obj.dxf_entity:
-            pen = get_qt_pen_from_dxf(self.arc_obj.dxf_entity)
-            self.setPen(pen)
-        else:
-            self.setPen(QPen(QColor(0, 0, 0), 0.2))
 
     def update_path(self):
-        """Update arc path from the model object."""
         cx, cy = self.arc_obj.cx, self.arc_obj.cy
         r = self.arc_obj.radius
         start = self.arc_obj.start_angle
         end = self.arc_obj.end_angle
-        
-        # Calculate span angle
-        span = end - start if end >= start else 360 - (start - end)
-        
-        rect = QRectF(cx - r, cy - r, 2 * r, 2 * r)
+        if end < start:
+            span = 360 - (start - end)
+        else:
+            span = end - start
+        rect = QRectF(cx - r, cy - r, 2*r, 2*r)
         path = QPainterPath()
         path.arcMoveTo(rect, start)
         path.arcTo(rect, start, span)
         self.setPath(path)
 
-
 class GraphicsText(QGraphicsTextItem):
-    """Graphics item representing text annotation."""
-    
-    def __init__(self, text_obj: TextObject):
+    def __init__(self, text_obj):
         super().__init__(text_obj.text)
         self.text_obj = text_obj
         self.setPos(text_obj.x, text_obj.y)
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.ItemIsMovable, True)
-        self.setDefaultTextColor(QColor(0, 0, 0))
+        self.setDefaultTextColor(QColor(0,0,0))
         self.setFont(QFont("Arial", int(text_obj.height)))
 
-    def itemChange(self, change: QGraphicsItem.GraphicsItemChange, value):
+    def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionChange:
             self.text_obj.x = value.x()
             self.text_obj.y = value.y()
@@ -328,231 +170,157 @@ class GraphicsText(QGraphicsTextItem):
                 self.text_obj.dxf_entity.dxf.insert = Vec3(value.x(), value.y(), 0)
         return super().itemChange(change, value)
 
-
 class GraphicsDimension(QGraphicsItemGroup):
-    """Graphics item representing dimension annotations."""
-    
-    def __init__(self, dim_obj: DimensionObject):
+    def __init__(self, dim_obj):
         super().__init__()
         self.dim_obj = dim_obj
         self.update_graphics()
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
 
     def update_graphics(self):
-        """Update all dimension graphics based on type."""
-        # Clear existing items
         for child in self.childItems():
             self.removeFromGroup(child)
             if child.scene():
                 child.scene().removeItem(child)
-        
-        # Add dimension based on type
-        if self.dim_obj.dim_type == "linear":
-            p1 = self.dim_obj.points[0]
-            p2 = self.dim_obj.points[1]
-            self._add_linear_dimension(p1, p2)
-        elif self.dim_obj.dim_type == "radius":
-            center = self.dim_obj.points[0]
-            point_on = self.dim_obj.points[1]
-            self._add_radius_dimension(center, point_on)
-        elif self.dim_obj.dim_type == "diameter":
-            center = self.dim_obj.points[0]
-            point_on = self.dim_obj.points[1]
-            self._add_diameter_dimension(center, point_on)
-        elif self.dim_obj.dim_type == "angular":
-            vertex = self.dim_obj.points[0]
-            p1 = self.dim_obj.points[1]
-            p2 = self.dim_obj.points[2]
-            self._add_angular_dimension(vertex, p1, p2)
+        if self.dim_obj.dim_type == "Linear":
+            self._draw_linear()
+        elif self.dim_obj.dim_type == "Radius":
+            self._draw_radius()
+        elif self.dim_obj.dim_type == "Diameter":
+            self._draw_diameter()
+        elif self.dim_obj.dim_type == "Angular":
+            self._draw_angular()
 
-    def _add_linear_dimension(self, p1: QPointF, p2: QPointF):
-        """Add linear dimension between two points."""
+    def _draw_linear(self):
+        p1 = self.dim_obj.p1
+        p2 = self.dim_obj.p2
         dx = p2.x() - p1.x()
         dy = p2.y() - p1.y()
         length = math.hypot(dx, dy)
         if length == 0:
             return
-        
-        # Calculate normal direction for extension lines
         nx = -dy / length
         ny = dx / length
         off = self.dim_obj.offset
-        
-        ext1_end = QPointF(p1.x() + nx * off, p1.y() + ny * off)
-        ext2_end = QPointF(p2.x() + nx * off, p2.y() + ny * off)
-        
+        ext1_start = p1
+        ext1_end = QPointF(p1.x() + nx*off, p1.y() + ny*off)
+        ext2_start = p2
+        ext2_end = QPointF(p2.x() + nx*off, p2.y() + ny*off)
         dim_line = QGraphicsLineItem(QLineF(ext1_end, ext2_end))
-        ext_line1 = QGraphicsLineItem(QLineF(p1, ext1_end))
-        ext_line2 = QGraphicsLineItem(QLineF(p2, ext2_end))
+        ext_line1 = QGraphicsLineItem(QLineF(ext1_start, ext1_end))
+        ext_line2 = QGraphicsLineItem(QLineF(ext2_start, ext2_end))
         text = QGraphicsTextItem(f"{length:.2f}")
-        
         mid = (ext1_end + ext2_end) / 2
         text.setPos(mid - text.boundingRect().center())
-        
-        pen = QPen(QColor(0, 0, 0), 0.2)
+        pen = QPen(QColor(0,0,0), 0.2)
         dim_line.setPen(pen)
         ext_line1.setPen(pen)
         ext_line2.setPen(pen)
-        text.setDefaultTextColor(QColor(0, 0, 0))
-        
+        text.setDefaultTextColor(QColor(0,0,0))
         self.addToGroup(dim_line)
         self.addToGroup(ext_line1)
         self.addToGroup(ext_line2)
         self.addToGroup(text)
 
-    def _add_radius_dimension(self, center: QPointF, point_on: QPointF):
-        """Add radius dimension from center to point on circle."""
-        r = math.hypot(point_on.x() - center.x(), point_on.y() - center.y())
-        
-        line = QGraphicsLineItem(QLineF(center, point_on))
-        text = QGraphicsTextItem(f"R{r:.2f}")
-        
-        mid = (center + point_on) / 2
-        text.setPos(mid - text.boundingRect().center())
-        
-        pen = QPen(QColor(0, 0, 0), 0.2)
+    def _draw_radius(self):
+        center = self.dim_obj.p1
+        radius = self.dim_obj.radius
+        arrow_end = QPointF(center.x() + radius, center.y())
+        line = QGraphicsLineItem(QLineF(center, arrow_end))
+        text = QGraphicsTextItem(f"R{radius:.2f}")
+        text.setPos(arrow_end.x() + 1, arrow_end.y())
+        pen = QPen(QColor(0,0,0), 0.2)
         line.setPen(pen)
-        text.setDefaultTextColor(QColor(0, 0, 0))
-        
+        text.setDefaultTextColor(QColor(0,0,0))
         self.addToGroup(line)
         self.addToGroup(text)
 
-    def _add_diameter_dimension(self, center: QPointF, point_on: QPointF):
-        """Add diameter dimension across circle."""
-        r = math.hypot(point_on.x() - center.x(), point_on.y() - center.y())
-        opposite = QPointF(center.x() * 2 - point_on.x(), center.y() * 2 - point_on.y())
-        
-        line = QGraphicsLineItem(QLineF(point_on, opposite))
-        text = QGraphicsTextItem(f"Ø{r * 2:.2f}")
-        
-        mid = (point_on + opposite) / 2
-        text.setPos(mid - text.boundingRect().center())
-        
-        pen = QPen(QColor(0, 0, 0), 0.2)
+    def _draw_diameter(self):
+        center = self.dim_obj.p1
+        radius = self.dim_obj.diameter / 2
+        arrow_end1 = QPointF(center.x() + radius, center.y())
+        arrow_end2 = QPointF(center.x() - radius, center.y())
+        line = QGraphicsLineItem(QLineF(arrow_end1, arrow_end2))
+        text = QGraphicsTextItem(f"Ø{self.dim_obj.diameter:.2f}")
+        text.setPos(center.x(), center.y() - 1)
+        pen = QPen(QColor(0,0,0), 0.2)
         line.setPen(pen)
-        text.setDefaultTextColor(QColor(0, 0, 0))
-        
+        text.setDefaultTextColor(QColor(0,0,0))
         self.addToGroup(line)
         self.addToGroup(text)
 
-    def _add_angular_dimension(self, vertex: QPointF, p1: QPointF, p2: QPointF):
-        """Add angular dimension between two vectors from vertex."""
-        v1 = p1 - vertex
-        v2 = p2 - vertex
-        
-        # Calculate angle between vectors
-        angle = math.degrees(math.atan2(v1.x() * v2.y() - v1.y() * v2.x(), 
-                                         v1.x() * v2.x() + v1.y() * v2.y()))
-        angle = abs(angle)
-        
-        # Draw arc at fixed radius from vertex
+    def _draw_angular(self):
+        vertex = self.dim_obj.p1
+        angle = self.dim_obj.angle
         r = 5
-        start_angle = math.degrees(math.atan2(v1.y(), v1.x()))
-        end_angle = math.degrees(math.atan2(v2.y(), v2.x()))
-        
-        rect = QRectF(vertex.x() - r, vertex.y() - r, 2 * r, 2 * r)
+        start_angle = 0
+        end_angle = angle
+        rect = QRectF(vertex.x() - r, vertex.y() - r, 2*r, 2*r)
         path = QPainterPath()
         path.arcMoveTo(rect, start_angle)
-        path.arcTo(rect, start_angle, angle)
-        arc_item = QGraphicsPathItem(path)
-        
-        # Position text at middle of arc
+        path.arcTo(rect, start_angle, end_angle)
+        arc = QGraphicsPathItem(path)
         text = QGraphicsTextItem(f"{angle:.1f}°")
-        mid_angle = start_angle + angle / 2
-        rad = math.radians(mid_angle)
-        text_pos = QPointF(vertex.x() + r * 1.2 * math.cos(rad), 
-                          vertex.y() + r * 1.2 * math.sin(rad))
-        text.setPos(text_pos - text.boundingRect().center())
-        
-        pen = QPen(QColor(0, 0, 0), 0.2)
-        arc_item.setPen(pen)
-        text.setDefaultTextColor(QColor(0, 0, 0))
-        
-        self.addToGroup(arc_item)
+        mid_angle = math.radians(angle/2)
+        tx = vertex.x() + r * math.cos(mid_angle)
+        ty = vertex.y() - r * math.sin(mid_angle)
+        text.setPos(tx, ty)
+        pen = QPen(QColor(0,0,0), 0.2)
+        arc.setPen(pen)
+        text.setDefaultTextColor(QColor(0,0,0))
+        self.addToGroup(arc)
         self.addToGroup(text)
 
-
-# =============================================================================
-# SNAP MANAGER (OBJECT SNAPPING FOR PRECISION DRAWING)
-# =============================================================================
-
+# ------------------ Привязка ------------------
 class SnapManager:
-    """Manages object snapping for precision drawing."""
-    
-    def __init__(self, view: 'CadView'):
-        self.view = view
-        self.enabled = True
-        self.snap_endpoint = True
-        self.snap_midpoint = True
-        self.snap_center = True
-        self.snap_intersection = True
-        self.snap_nearest = False
-        self.snap_tolerance = SNAP_TOLERANCE
+    def __init__(self, scene):
+        self.scene = scene
+        self.snap_distance = 30
+        self.snap_to_endpoints = True
+        self.snap_to_center = True
 
-    def snap_point(self, screen_point: QPointF) -> Optional[QPointF]:
-        """Find snap point in world coordinates.
-        
-        Args:
-            screen_point: Point in screen coordinates.
-            
-        Returns:
-            Snapped point in world coordinates, or None if no snap found.
-        """
-        if not self.enabled:
-            return None
-        
-        scene = self.view.scene()
-        if scene is None:
-            return None
-        
-        best_dist = float('inf')
+    def snap_point(self, view, screen_pos):
+        scene_pos = view.mapToScene(screen_pos)
+        if not self.scene:
+            return scene_pos
+        best_dist = self.snap_distance
         best_point = None
-        
-        for item in scene.items():
-            if isinstance(item, (GraphicsPoint, GraphicsLine, GraphicsCircle, 
-                                GraphicsArc, GraphicsRect)):
-                points = self._get_snap_points(item)
-                for p in points:
-                    screen_p = self.view.mapFromScene(p)
-                    dist = (screen_p.x() - screen_point.x())**2 + \
-                           (screen_p.y() - screen_point.y())**2
-                    if dist < best_dist and dist < self.snap_tolerance**2:
+        for item in self.scene.items():
+            if self.snap_to_endpoints:
+                if isinstance(item, GraphicsLine):
+                    line = item.line()
+                    for p in [line.p1(), line.p2()]:
+                        pixel_pos = view.mapFromScene(p)
+                        dist = (screen_pos - pixel_pos).manhattanLength()
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_point = p
+                elif isinstance(item, GraphicsRect):
+                    rect = item.rect()
+                    for p in [rect.topLeft(), rect.topRight(), rect.bottomLeft(), rect.bottomRight()]:
+                        pixel_pos = view.mapFromScene(p)
+                        dist = (screen_pos - pixel_pos).manhattanLength()
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_point = p
+                elif isinstance(item, GraphicsPoint):
+                    p = item.pos()
+                    pixel_pos = view.mapFromScene(p)
+                    dist = (screen_pos - pixel_pos).manhattanLength()
+                    if dist < best_dist:
                         best_dist = dist
                         best_point = p
-        
-        return best_point
+            if self.snap_to_center and isinstance(item, GraphicsCircle):
+                p = QPointF(item.circle_obj.cx, item.circle_obj.cy)
+                pixel_pos = view.mapFromScene(p)
+                dist = (screen_pos - pixel_pos).manhattanLength()
+                if dist < best_dist:
+                    best_dist = dist
+                    best_point = p
+        return best_point if best_point else scene_pos
 
-    def _get_snap_points(self, item: QGraphicsItem) -> List[QPointF]:
-        """Get available snap points for a graphics item."""
-        points = []
-        
-        if isinstance(item, GraphicsPoint):
-            points.append(item.pos())
-        elif isinstance(item, GraphicsLine):
-            if self.snap_endpoint:
-                points.append(item.line().p1())
-                points.append(item.line().p2())
-            if self.snap_midpoint:
-                p1 = item.line().p1()
-                p2 = item.line().p2()
-                points.append((p1 + p2) / 2)
-        elif isinstance(item, GraphicsCircle):
-            if self.snap_center:
-                points.append(item.rect().center())
-        elif isinstance(item, GraphicsArc):
-            if self.snap_center:
-                points.append(item.boundingRect().center())
-        
-        return points
-
-
-# =============================================================================
-# CUSTOM VIEW FOR DRAWING (CANVAS)
-# =============================================================================
-
+# ------------------ Кастомный вид для рисования ------------------
 class CadView(QGraphicsView):
-    """Custom QGraphicsView for CAD drawing with tool support."""
-    
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setRenderHint(QPainter.Antialiasing)
@@ -560,89 +328,180 @@ class CadView(QGraphicsView):
         self.tool = "Select"
         self.start_point = None
         self.temp_item = None
+        self.snap_manager = None
+        self.dim_type = "Linear"
         self.parent_window = parent
-        self.snap_manager = SnapManager(self)
+        self.tooltip_item = None
+        self.hovered_item = None
+        self.original_pen = None
+        self.original_color = None
+        self.setCursor(Qt.ArrowCursor)
 
-    def set_tool(self, tool: str):
-        """Set the current drawing tool."""
+    def setScene(self, scene):
+        super().setScene(scene)
+        if self.snap_manager is None:
+            self.snap_manager = SnapManager(scene)
+        else:
+            self.snap_manager.scene = scene
+
+    def set_tool(self, tool):
         self.tool = tool
         self.start_point = None
         if self.temp_item:
             self.scene().removeItem(self.temp_item)
             self.temp_item = None
+        if self.tooltip_item:
+            self.scene().removeItem(self.tooltip_item)
+            self.tooltip_item = None
+        if tool == "Select":
+            self.setCursor(Qt.ArrowCursor)
+        else:
+            self.setCursor(Qt.CrossCursor)
+
+    def set_dim_type(self, dim_type):
+        self.dim_type = dim_type
 
     def mousePressEvent(self, event):
-        """Handle mouse press events for drawing."""
         if self.tool == "Select":
             super().mousePressEvent(event)
             return
 
-        # Get snapped point if available
-        snapped = self.snap_manager.snap_point(event.pos())
-        pos = snapped if snapped is not None else self.mapToScene(event.pos())
+        pos = self.mapToScene(event.pos())
+        if self.snap_manager:
+            pos = self.snap_manager.snap_point(self, event.pos())
 
         if event.button() == Qt.LeftButton:
             if self.start_point is None:
                 self.start_point = pos
-                self._create_temp_item(pos)
+                if self.tool == "Line":
+                    self.temp_item = QGraphicsLineItem(QLineF(pos, pos))
+                    self.temp_item.setPen(QPen(QColor(0,0,255), 0.2, Qt.DashLine))
+                    self.scene().addItem(self.temp_item)
+                elif self.tool == "Circle":
+                    self.temp_item = QGraphicsEllipseItem()
+                    self.temp_item.setPen(QPen(QColor(0,0,255), 0.2, Qt.DashLine))
+                    self.scene().addItem(self.temp_item)
+                elif self.tool == "Rect":
+                    self.temp_item = QGraphicsRectItem()
+                    self.temp_item.setPen(QPen(QColor(0,0,255), 0.2, Qt.DashLine))
+                    self.scene().addItem(self.temp_item)
+                elif self.tool in ("Dim", "RadiusDim", "DiameterDim", "AngularDim"):
+                    self.temp_item = QGraphicsLineItem(QLineF(pos, pos))
+                    self.temp_item.setPen(QPen(QColor(0,0,255), 0.2, Qt.DashLine))
+                    self.scene().addItem(self.temp_item)
             else:
                 self.finish_drawing(pos)
         elif event.button() == Qt.RightButton:
-            self._cancel_drawing()
+            if self.temp_item:
+                self.scene().removeItem(self.temp_item)
+                self.temp_item = None
+            self.start_point = None
         else:
             super().mousePressEvent(event)
 
-    def _create_temp_item(self, pos: QPointF):
-        """Create temporary preview item for drawing."""
-        pen = QPen(QColor(0, 0, 255), 0.2, Qt.DashLine)
-        
-        if self.tool in ("Line", "DimLinear", "DimRadius", "DimDiameter", "DimAngular"):
-            self.temp_item = QGraphicsLineItem(QLineF(pos, pos))
-            self.temp_item.setPen(pen)
-            self.scene().addItem(self.temp_item)
-        elif self.tool == "Circle":
-            self.temp_item = QGraphicsEllipseItem()
-            self.temp_item.setPen(pen)
-            self.scene().addItem(self.temp_item)
-        elif self.tool == "Rect":
-            self.temp_item = QGraphicsRectItem()
-            self.temp_item.setPen(pen)
-            self.scene().addItem(self.temp_item)
-        elif self.tool == "Text":
-            self.finish_drawing(pos)
-
-    def _cancel_drawing(self):
-        """Cancel current drawing operation."""
-        if self.temp_item:
-            self.scene().removeItem(self.temp_item)
-            self.temp_item = None
-        self.start_point = None
-
     def mouseMoveEvent(self, event):
-        """Handle mouse move for dynamic drawing preview."""
-        if self.tool != "Select" and self.start_point and self.temp_item:
-            snapped = self.snap_manager.snap_point(event.pos())
-            pos = snapped if snapped is not None else self.mapToScene(event.pos())
-            
-            if self.tool in ("Line", "DimLinear", "DimRadius", "DimDiameter", "DimAngular"):
+        # Подсказка для инструментов рисования (следует за курсором)
+        if self.tool != "Select":
+            if self.tooltip_item is None:
+                self.tooltip_item = QGraphicsSimpleTextItem()
+                self.tooltip_item.setBrush(QBrush(QColor(0,0,0)))
+                self.tooltip_item.setFont(QFont("Arial", 8))
+                self.scene().addItem(self.tooltip_item)
+            self.tooltip_item.setText(self.tool)
+            scene_pos = self.mapToScene(event.pos())
+            self.tooltip_item.setPos(scene_pos.x() + 5, scene_pos.y() - 10)
+        else:
+            if self.tooltip_item:
+                self.scene().removeItem(self.tooltip_item)
+                self.tooltip_item = None
+
+        # Подсветка объектов в режиме выбора
+        if self.tool == "Select":
+            pos = self.mapToScene(event.pos())
+            item = self.scene().itemAt(pos, QTransform())
+            if item != self.hovered_item:
+                self.clear_highlight()
+                self.hovered_item = item
+                if item and item.flags() & QGraphicsItem.ItemIsSelectable:
+                    self.highlight_item(item)
+        else:
+            self.clear_highlight()
+
+        # Обработка перемещения для временных объектов
+        if self.start_point and self.temp_item:
+            pos = self.mapToScene(event.pos())
+            if self.snap_manager:
+                pos = self.snap_manager.snap_point(self, event.pos())
+            if self.tool == "Line":
                 self.temp_item.setLine(QLineF(self.start_point, pos))
             elif self.tool == "Circle":
                 dx = pos.x() - self.start_point.x()
                 dy = pos.y() - self.start_point.y()
                 r = math.hypot(dx, dy)
-                rect = QRectF(self.start_point.x() - r, self.start_point.y() - r, 
-                             2 * r, 2 * r)
+                rect = QRectF(self.start_point.x() - r, self.start_point.y() - r, 2*r, 2*r)
                 self.temp_item.setRect(rect)
             elif self.tool == "Rect":
-                x1, y1 = self.start_point.x(), self.start_point.y()
-                x2, y2 = pos.x(), pos.y()
-                rect = QRectF(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
+                x1 = self.start_point.x()
+                y1 = self.start_point.y()
+                x2 = pos.x()
+                y2 = pos.y()
+                rect = QRectF(min(x1,x2), min(y1,y2), abs(x2-x1), abs(y2-y1))
                 self.temp_item.setRect(rect)
+            elif self.tool in ("Dim", "RadiusDim", "DiameterDim", "AngularDim"):
+                self.temp_item.setLine(QLineF(self.start_point, pos))
         else:
             super().mouseMoveEvent(event)
 
-    def finish_drawing(self, pos: QPointF):
-        """Complete the current drawing operation."""
+    def contextMenuEvent(self, event):
+        if self.tool == "Select":
+            super().contextMenuEvent(event)
+            return
+        if not self.snap_manager:
+            return
+        menu = QMenu(self)
+        snap_end_action = QAction("Snap to endpoints", self)
+        snap_end_action.setCheckable(True)
+        snap_end_action.setChecked(self.snap_manager.snap_to_endpoints)
+        snap_end_action.triggered.connect(lambda checked: self.set_snap_endpoints(checked))
+        menu.addAction(snap_end_action)
+        snap_center_action = QAction("Snap to centers", self)
+        snap_center_action.setCheckable(True)
+        snap_center_action.setChecked(self.snap_manager.snap_to_center)
+        snap_center_action.triggered.connect(lambda checked: self.set_snap_center(checked))
+        menu.addAction(snap_center_action)
+        menu.exec_(event.globalPos())
+
+    def set_snap_endpoints(self, enabled):
+        self.snap_manager.snap_to_endpoints = enabled
+        self.parent_window.update_snap_settings(enabled, self.snap_manager.snap_to_center)
+
+    def set_snap_center(self, enabled):
+        self.snap_manager.snap_to_center = enabled
+        self.parent_window.update_snap_settings(self.snap_manager.snap_to_endpoints, enabled)
+
+    def highlight_item(self, item):
+        """Подсветка объекта изменением пера или цвета текста."""
+        if hasattr(item, 'pen'):
+            self.original_pen = item.pen()
+            new_pen = QPen(QColor(255, 0, 0), self.original_pen.widthF() + 0.2)
+            new_pen.setStyle(self.original_pen.style())
+            item.setPen(new_pen)
+        elif isinstance(item, QGraphicsTextItem):
+            self.original_color = item.defaultTextColor()
+            item.setDefaultTextColor(QColor(255, 0, 0))
+
+    def clear_highlight(self):
+        """Восстановление исходного вида объекта."""
+        if self.hovered_item:
+            if hasattr(self.hovered_item, 'pen') and self.original_pen is not None:
+                self.hovered_item.setPen(self.original_pen)
+            elif isinstance(self.hovered_item, QGraphicsTextItem) and self.original_color is not None:
+                self.hovered_item.setDefaultTextColor(self.original_color)
+            self.hovered_item = None
+            self.original_pen = None
+            self.original_color = None
+
+    def finish_drawing(self, pos):
         if self.tool == "Line":
             self.parent_window.add_line(self.start_point.x(), self.start_point.y(), pos.x(), pos.y())
         elif self.tool == "Circle":
@@ -651,154 +510,140 @@ class CadView(QGraphicsView):
         elif self.tool == "Rect":
             self.parent_window.add_rectangle(self.start_point.x(), self.start_point.y(), pos.x(), pos.y())
         elif self.tool == "Arc":
-            self._draw_arc()
+            dlg = QDialog(self.parent_window)
+            dlg.setWindowTitle("Arc")
+            layout = QFormLayout(dlg)
+            r_edit = QLineEdit("10")
+            s_edit = QLineEdit("0")
+            e_edit = QLineEdit("90")
+            layout.addRow("Radius:", r_edit)
+            layout.addRow("Start angle:", s_edit)
+            layout.addRow("End angle:", e_edit)
+            btn = QPushButton("OK")
+            btn.clicked.connect(dlg.accept)
+            layout.addRow(btn)
+            if dlg.exec_():
+                r = float(r_edit.text())
+                sa = float(s_edit.text())
+                ea = float(e_edit.text())
+                self.parent_window.add_arc(self.start_point.x(), self.start_point.y(), r, sa, ea)
         elif self.tool == "Text":
-            self._draw_text()
-        elif self.tool == "DimLinear":
-            self.parent_window.add_dimension("linear", [self.start_point, pos])
-        elif self.tool == "DimRadius":
-            self.parent_window.add_dimension("radius", [self.start_point, pos])
-        elif self.tool == "DimDiameter":
-            self.parent_window.add_dimension("diameter", [self.start_point, pos])
-        elif self.tool == "DimAngular":
-            self._draw_angular_dimension()
-        
-        # Cleanup
+            text, ok = QInputDialog.getText(self.parent_window, "Text", "Enter text:")
+            if ok and text:
+                self.parent_window.add_text(self.start_point.x(), self.start_point.y(), text)
+        elif self.tool == "Dim":
+            self.parent_window.add_dimension(self.start_point, pos, "Linear")
+        elif self.tool == "RadiusDim":
+            radius, ok = QInputDialog.getDouble(self.parent_window, "Radius", "Enter radius:")
+            if ok:
+                self.parent_window.add_radius_dim(self.start_point, radius)
+        elif self.tool == "DiameterDim":
+            diam, ok = QInputDialog.getDouble(self.parent_window, "Diameter", "Enter diameter:")
+            if ok:
+                self.parent_window.add_diameter_dim(self.start_point, diam)
+        elif self.tool == "AngularDim":
+            angle, ok = QInputDialog.getDouble(self.parent_window, "Angle", "Enter angle (degrees):")
+            if ok:
+                self.parent_window.add_angular_dim(self.start_point, angle)
+
         if self.temp_item:
             self.scene().removeItem(self.temp_item)
             self.temp_item = None
         self.start_point = None
 
-    def _draw_arc(self):
-        """Show dialog and create arc."""
-        dlg = QDialog(self.parent_window)
-        dlg.setWindowTitle("Arc")
-        layout = QFormLayout(dlg)
-        r_edit = QLineEdit(str(DEFAULT_ARC_RADIUS))
-        s_edit = QLineEdit("0")
-        e_edit = QLineEdit("90")
-        layout.addRow("Radius:", r_edit)
-        layout.addRow("Start angle:", s_edit)
-        layout.addRow("End angle:", e_edit)
-        btn = QPushButton("OK")
-        btn.clicked.connect(dlg.accept)
-        layout.addRow(btn)
-        if dlg.exec_():
-            r = float(r_edit.text())
-            sa = float(s_edit.text())
-            ea = float(e_edit.text())
-            self.parent_window.add_arc(self.start_point.x(), self.start_point.y(), r, sa, ea)
-
-    def _draw_text(self):
-        """Show dialog and create text annotation."""
-        text, ok = QInputDialog.getText(self.parent_window, "Text", "Enter text:")
-        if ok and text:
-            self.parent_window.add_text(self.start_point.x(), self.start_point.y(), text)
-
-    def _draw_angular_dimension(self):
-        """Show dialog and create angular dimension."""
-        dlg = QDialog(self.parent_window)
-        dlg.setWindowTitle("Angular Dimension")
-        layout = QFormLayout(dlg)
-        layout.addRow(QLabel("Click on vertex, then on two points on arms"))
-        angle_edit = QLineEdit("45")
-        layout.addRow("Angle (degrees):", angle_edit)
-        btn = QPushButton("OK")
-        btn.clicked.connect(dlg.accept)
-        layout.addRow(btn)
-        if dlg.exec_():
-            angle = float(angle_edit.text())
-            vertex = self.start_point
-            p1 = QPointF(vertex.x() + 5, vertex.y())
-            p2 = QPointF(vertex.x() + 5 * math.cos(math.radians(angle)), 
-                        vertex.y() + 5 * math.sin(math.radians(angle)))
-            self.parent_window.add_dimension("angular", [vertex, p1, p2])
-
-
-# =============================================================================
-# EDIT PROPERTIES DIALOG
-# =============================================================================
-
-class EditPropertiesDialog(QDialog):
-    """Dialog for editing object properties."""
-    
-    def __init__(self, obj: GraphicObject, parent=None):
+# ------------------ Диалог свойств ------------------
+class PropertyDialog(QDialog):
+    def __init__(self, obj, parent=None):
         super().__init__(parent)
         self.obj = obj
-        self.setWindowTitle("Edit Properties")
+        self.setWindowTitle("Object Properties")
         layout = QFormLayout(self)
 
-        # Color button
         self.color_btn = QPushButton("Choose Color")
         self.color_btn.clicked.connect(self.choose_color)
         layout.addRow("Color:", self.color_btn)
 
-        # Line width
-        self.width_spin = QDoubleSpinBox()
-        self.width_spin.setRange(0.01, 10.0)
-        self.width_spin.setSingleStep(0.1)
-        layout.addRow("Line width:", self.width_spin)
+        pen_width = obj.graphics_item.pen().widthF() if hasattr(obj.graphics_item, 'pen') else 0.2
+        self.width_edit = QLineEdit(str(pen_width))
+        layout.addRow("Line width:", self.width_edit)
 
-        # Line type
         self.linetype_combo = QComboBox()
-        self.linetype_combo.addItems(["Continuous", "Dashed", "Dotted", "DashDot", "DashDotDot"])
+        self.linetype_combo.addItems(["Solid", "Dash", "DashDot"])
         layout.addRow("Line type:", self.linetype_combo)
 
-        # Load current values if DXF entity exists
-        if obj.dxf_entity:
-            if hasattr(obj.dxf_entity.dxf, 'lineweight'):
-                lw = obj.dxf_entity.dxf.lineweight
-                if lw > 0:
-                    self.width_spin.setValue(lw / 100.0)
-                else:
-                    self.width_spin.setValue(0.2)
-            if hasattr(obj.dxf_entity.dxf, 'linetype'):
-                lt = obj.dxf_entity.dxf.linetype
-                idx = self.linetype_combo.findText(lt)
-                if idx >= 0:
-                    self.linetype_combo.setCurrentIndex(idx)
-
-        ok_btn = QPushButton("OK")
-        ok_btn.clicked.connect(self.accept)
-        layout.addRow(ok_btn)
+        btn = QPushButton("Apply")
+        btn.clicked.connect(self.apply)
+        layout.addRow(btn)
 
     def choose_color(self):
-        """Open color picker dialog."""
         color = QColorDialog.getColor()
         if color.isValid():
-            # Simplified: set to black (DXF color index 7)
-            pass
+            self.color_btn.setStyleSheet(f"background-color: {color.name()}")
+            self.color_btn.color = color
 
-    def get_values(self) -> Dict[str, Any]:
-        """Get edited property values."""
-        return {
-            'linewidth': self.width_spin.value(),
-            'linetype': self.linetype_combo.currentText()
-        }
+    def apply(self):
+        item = self.obj.graphics_item
+        if hasattr(item, 'pen'):
+            pen = item.pen()
+            if hasattr(self.color_btn, 'color'):
+                pen.setColor(self.color_btn.color)
+            pen.setWidthF(float(self.width_edit.text()))
+            linetype = self.linetype_combo.currentText()
+            if linetype == "Dash":
+                pen.setStyle(Qt.DashLine)
+            elif linetype == "DashDot":
+                pen.setStyle(Qt.DashDotLine)
+            else:
+                pen.setStyle(Qt.SolidLine)
+            item.setPen(pen)
 
+            if self.obj.dxf_entity:
+                color = pen.color()
+                try:
+                    self.obj.dxf_entity.dxf.rgb = (color.red(), color.green(), color.blue())
+                except AttributeError:
+                    r, g, b = color.red(), color.green(), color.blue()
+                    if (r, g, b) == (255, 0, 0):
+                        idx = 1
+                    elif (r, g, b) == (255, 255, 0):
+                        idx = 2
+                    elif (r, g, b) == (0, 255, 0):
+                        idx = 3
+                    elif (r, g, b) == (0, 255, 255):
+                        idx = 4
+                    elif (r, g, b) == (0, 0, 255):
+                        idx = 5
+                    elif (r, g, b) == (255, 0, 255):
+                        idx = 6
+                    else:
+                        idx = 7
+                    self.obj.dxf_entity.dxf.color = idx
 
-# =============================================================================
-# MAIN APPLICATION WINDOW
-# =============================================================================
+                if pen.style() == Qt.DashLine:
+                    self.obj.dxf_entity.dxf.linetype = "DASHED"
+                elif pen.style() == Qt.DashDotLine:
+                    self.obj.dxf_entity.dxf.linetype = "DASHDOT"
+                else:
+                    self.obj.dxf_entity.dxf.linetype = "CONTINUOUS"
+        self.accept()
 
+# ------------------ Основное окно ------------------
 class CadWindow(QMainWindow):
-    """Main CAD application window."""
-    
     def __init__(self):
         super().__init__()
         self.setWindowTitle("DXF Editor")
         self.setGeometry(100, 100, 1200, 800)
 
         self.scene = QGraphicsScene()
-        self.scene.setBackgroundBrush(QBrush(QColor(255, 255, 255)))
+        self.scene.setBackgroundBrush(QBrush(QColor(255,255,255)))
         self.view = CadView(self)
         self.view.setScene(self.scene)
         self.setCentralWidget(self.view)
 
         self.dxf_doc = None
         self.dxf_modelspace = None
-        self.obj_map: Dict = {}
-        self.next_id = 1
+        self.obj_map = {}
+        self.current_file = None
 
         self.init_ui()
         self.init_statusbar()
@@ -812,9 +657,12 @@ class CadWindow(QMainWindow):
         open_action.triggered.connect(self.open_file)
         save_action = QAction("Save", self)
         save_action.triggered.connect(self.save_file)
+        save_as_action = QAction("Save As...", self)
+        save_as_action.triggered.connect(self.save_as_file)
         toolbar.addAction(new_action)
         toolbar.addAction(open_action)
         toolbar.addAction(save_action)
+        toolbar.addAction(save_as_action)
         toolbar.addSeparator()
 
         select_action = QAction("Select", self)
@@ -829,14 +677,6 @@ class CadWindow(QMainWindow):
         arc_action.triggered.connect(lambda: self.set_tool("Arc"))
         text_action = QAction("Text", self)
         text_action.triggered.connect(lambda: self.set_tool("Text"))
-        dim_linear_action = QAction("Dim Linear", self)
-        dim_linear_action.triggered.connect(lambda: self.set_tool("DimLinear"))
-        dim_radius_action = QAction("Dim Radius", self)
-        dim_radius_action.triggered.connect(lambda: self.set_tool("DimRadius"))
-        dim_diameter_action = QAction("Dim Diameter", self)
-        dim_diameter_action.triggered.connect(lambda: self.set_tool("DimDiameter"))
-        dim_angular_action = QAction("Dim Angular", self)
-        dim_angular_action.triggered.connect(lambda: self.set_tool("DimAngular"))
 
         toolbar.addAction(select_action)
         toolbar.addAction(line_action)
@@ -845,56 +685,75 @@ class CadWindow(QMainWindow):
         toolbar.addAction(arc_action)
         toolbar.addAction(text_action)
         toolbar.addSeparator()
-        toolbar.addAction(dim_linear_action)
-        toolbar.addAction(dim_radius_action)
-        toolbar.addAction(dim_diameter_action)
-        toolbar.addAction(dim_angular_action)
 
-        dock = QDockWidget("Objects", self)
+        self.dim_type_combo = QComboBox()
+        self.dim_type_combo.addItems(["Linear", "Radius", "Diameter", "Angular"])
+        self.dim_type_combo.currentTextChanged.connect(self.on_dim_type_changed)
+        dim_action = QAction("Dimension", self)
+        dim_action.triggered.connect(lambda: self.set_tool("Dim"))
+        toolbar.addWidget(QLabel("Dim type:"))
+        toolbar.addWidget(self.dim_type_combo)
+        toolbar.addAction(dim_action)
+
+        # Панель объектов слева
+        left_dock = QDockWidget("Objects", self)
         self.list_widget = QListWidget()
         self.list_widget.itemClicked.connect(self.on_object_selected)
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.addWidget(self.list_widget)
+        container_left = QWidget()
+        layout_left = QVBoxLayout(container_left)
+        layout_left.addWidget(self.list_widget)
         edit_button = QPushButton("Edit Selected")
         edit_button.clicked.connect(self.edit_selected)
-        layout.addWidget(edit_button)
-        props_button = QPushButton("Properties")
-        props_button.clicked.connect(self.edit_properties)
-        layout.addWidget(props_button)
-        dock.setWidget(container)
-        self.addDockWidget(Qt.LeftDockWidgetArea, dock)
+        layout_left.addWidget(edit_button)
+        left_dock.setWidget(container_left)
+        self.addDockWidget(Qt.LeftDockWidgetArea, left_dock)
 
-        # Панель привязок
-        snap_dock = QDockWidget("Snap Settings", self)
-        snap_widget = QWidget()
-        snap_layout = QVBoxLayout(snap_widget)
-        self.snap_enable = QCheckBox("Enable Snap")
-        self.snap_enable.setChecked(True)
-        self.snap_enable.toggled.connect(self.toggle_snap)
-        snap_layout.addWidget(self.snap_enable)
-        self.snap_endpoint = QCheckBox("Endpoint")
-        self.snap_endpoint.setChecked(True)
-        self.snap_endpoint.toggled.connect(self.update_snap)
-        snap_layout.addWidget(self.snap_endpoint)
-        self.snap_midpoint = QCheckBox("Midpoint")
-        self.snap_midpoint.setChecked(True)
-        self.snap_midpoint.toggled.connect(self.update_snap)
-        snap_layout.addWidget(self.snap_midpoint)
-        self.snap_center = QCheckBox("Center")
-        self.snap_center.setChecked(True)
-        self.snap_center.toggled.connect(self.update_snap)
-        snap_layout.addWidget(self.snap_center)
-        snap_dock.setWidget(snap_widget)
-        self.addDockWidget(Qt.RightDockWidgetArea, snap_dock)
+        # Панель настроек справа
+        right_dock = QDockWidget("Settings", self)
+        container_right = QWidget()
+        layout_right = QVBoxLayout(container_right)
 
-    def toggle_snap(self, enabled):
-        self.view.snap_manager.enabled = enabled
+        # Группа привязок
+        snap_group = QGroupBox("Snap Settings")
+        snap_layout = QVBoxLayout()
+        self.snap_end_check = QCheckBox("Snap to endpoints")
+        self.snap_end_check.setChecked(True)
+        self.snap_end_check.toggled.connect(self.on_snap_end_toggled)
+        self.snap_center_check = QCheckBox("Snap to centers")
+        self.snap_center_check.setChecked(True)
+        self.snap_center_check.toggled.connect(self.on_snap_center_toggled)
+        snap_layout.addWidget(self.snap_end_check)
+        snap_layout.addWidget(self.snap_center_check)
+        snap_group.setLayout(snap_layout)
+        layout_right.addWidget(snap_group)
 
-    def update_snap(self):
-        self.view.snap_manager.snap_endpoint = self.snap_endpoint.isChecked()
-        self.view.snap_manager.snap_midpoint = self.snap_midpoint.isChecked()
-        self.view.snap_manager.snap_center = self.snap_center.isChecked()
+        # Группа стилей линии
+        style_group = QGroupBox("Line Style")
+        style_layout = QFormLayout()
+        self.line_color_btn = QPushButton("Choose Color")
+        self.line_color_btn.clicked.connect(self.choose_line_color)
+        style_layout.addRow("Color:", self.line_color_btn)
+        self.line_width_edit = QLineEdit("0.2")
+        style_layout.addRow("Width:", self.line_width_edit)
+        self.line_type_combo = QComboBox()
+        self.line_type_combo.addItems(["Solid", "Dash", "DashDot"])
+        style_layout.addRow("Type:", self.line_type_combo)
+        style_group.setLayout(style_layout)
+        layout_right.addWidget(style_group)
+
+        # Кнопка применить стиль к выделенному объекту
+        apply_style_btn = QPushButton("Apply Style to Selected")
+        apply_style_btn.clicked.connect(self.apply_style_to_selected)
+        layout_right.addWidget(apply_style_btn)
+
+        container_right.setLayout(layout_right)
+        right_dock.setWidget(container_right)
+        self.addDockWidget(Qt.RightDockWidgetArea, right_dock)
+
+        # Сохраняем текущие настройки стиля
+        self.current_line_color = QColor(0,0,0)
+        self.current_line_width = 0.2
+        self.current_line_type = "Solid"
 
     def init_statusbar(self):
         self.status = QStatusBar()
@@ -906,13 +765,95 @@ class CadWindow(QMainWindow):
         self.view.set_tool(tool)
         self.status_label.setText(f"Tool: {tool}")
 
+    def on_dim_type_changed(self, text):
+        self.view.dim_type = text
+
+    def on_snap_end_toggled(self, checked):
+        self.view.set_snap_endpoints(checked)
+
+    def on_snap_center_toggled(self, checked):
+        self.view.set_snap_center(checked)
+
+    def update_snap_settings(self, snap_end, snap_center):
+        self.snap_end_check.blockSignals(True)
+        self.snap_center_check.blockSignals(True)
+        self.snap_end_check.setChecked(snap_end)
+        self.snap_center_check.setChecked(snap_center)
+        self.snap_end_check.blockSignals(False)
+        self.snap_center_check.blockSignals(False)
+
+    def choose_line_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            self.current_line_color = color
+            self.line_color_btn.setStyleSheet(f"background-color: {color.name()}")
+            self.line_color_btn.color = color
+
+    def apply_style_to_selected(self):
+        """Применить текущие настройки стиля к выделенному объекту."""
+        selected = self.scene.selectedItems()
+        if not selected:
+            QMessageBox.information(self, "Info", "No object selected.")
+            return
+        for item in selected:
+            # Находим соответствующий GraphicObject
+            for obj in self.obj_map.values():
+                if obj.graphics_item == item:
+                    if hasattr(item, 'pen'):
+                        pen = item.pen()
+                        pen.setColor(self.current_line_color)
+                        pen.setWidthF(float(self.line_width_edit.text()))
+                        lt = self.line_type_combo.currentText()
+                        if lt == "Dash":
+                            pen.setStyle(Qt.DashLine)
+                        elif lt == "DashDot":
+                            pen.setStyle(Qt.DashDotLine)
+                        else:
+                            pen.setStyle(Qt.SolidLine)
+                        item.setPen(pen)
+                        if obj.dxf_entity:
+                            # Сохранить в DXF
+                            color = pen.color()
+                            try:
+                                obj.dxf_entity.dxf.rgb = (color.red(), color.green(), color.blue())
+                            except AttributeError:
+                                r, g, b = color.red(), color.green(), color.blue()
+                                if (r, g, b) == (255, 0, 0):
+                                    idx = 1
+                                elif (r, g, b) == (255, 255, 0):
+                                    idx = 2
+                                elif (r, g, b) == (0, 255, 0):
+                                    idx = 3
+                                elif (r, g, b) == (0, 255, 255):
+                                    idx = 4
+                                elif (r, g, b) == (0, 0, 255):
+                                    idx = 5
+                                elif (r, g, b) == (255, 0, 255):
+                                    idx = 6
+                                else:
+                                    idx = 7
+                                obj.dxf_entity.dxf.color = idx
+                            if pen.style() == Qt.DashLine:
+                                obj.dxf_entity.dxf.linetype = "DASHED"
+                            elif pen.style() == Qt.DashDotLine:
+                                obj.dxf_entity.dxf.linetype = "DASHDOT"
+                            else:
+                                obj.dxf_entity.dxf.linetype = "CONTINUOUS"
+                    break
+        QMessageBox.information(self, "Done", "Style applied to selected object(s).")
+
     def new_document(self):
+        fname, _ = QFileDialog.getSaveFileName(self, "Create new DXF", "", "DXF Files (*.dxf)")
+        if not fname:
+            return
         self.dxf_doc = ezdxf.new('R2010')
         self.dxf_modelspace = self.dxf_doc.modelspace()
+        self.current_file = fname
         self.scene.clear()
         self.list_widget.clear()
         self.obj_map.clear()
-        self.status_label.setText("New document")
+        self.status_label.setText(f"New document: {fname}")
+        self.dxf_doc.saveas(fname)
         self.view.fitInView(self.scene.itemsBoundingRect(), Qt.KeepAspectRatio)
 
     def open_file(self):
@@ -922,11 +863,62 @@ class CadWindow(QMainWindow):
         try:
             self.dxf_doc = ezdxf.readfile(fname)
             self.dxf_modelspace = self.dxf_doc.modelspace()
+            self.current_file = fname
             self.load_dxf_entities()
             self.status_label.setText(f"Loaded: {fname}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to open file:\n{str(e)}")
             traceback.print_exc()
+
+    def save_file(self):
+        if not self.dxf_doc:
+            QMessageBox.warning(self, "Warning", "No document opened.")
+            return
+        if not self.current_file:
+            self.save_as_file()
+            return
+        try:
+            self._sync_dxf()
+            self.dxf_doc.saveas(self.current_file)
+            QMessageBox.information(self, "Saved", f"File saved to {self.current_file}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Save failed:\n{str(e)}")
+
+    def save_as_file(self):
+        if not self.dxf_doc:
+            QMessageBox.warning(self, "Warning", "No document opened.")
+            return
+        fname, _ = QFileDialog.getSaveFileName(self, "Save DXF", "", "DXF Files (*.dxf)")
+        if not fname:
+            return
+        try:
+            self._sync_dxf()
+            self.dxf_doc.saveas(fname)
+            self.current_file = fname
+            QMessageBox.information(self, "Saved", f"File saved to {fname}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Save failed:\n{str(e)}")
+
+    def _sync_dxf(self):
+        for obj in self.obj_map.values():
+            if obj.dxf_entity:
+                if obj.type == "Point":
+                    obj.dxf_entity.dxf.location = Vec3(obj.x, obj.y, 0)
+                elif obj.type == "Line":
+                    obj.dxf_entity.dxf.start = Vec3(obj.x1, obj.y1, 0)
+                    obj.dxf_entity.dxf.end = Vec3(obj.x2, obj.y2, 0)
+                elif obj.type == "Circle":
+                    obj.dxf_entity.dxf.center = Vec3(obj.cx, obj.cy, 0)
+                    obj.dxf_entity.dxf.radius = obj.radius
+                elif obj.type == "Arc":
+                    obj.dxf_entity.dxf.center = Vec3(obj.cx, obj.cy, 0)
+                    obj.dxf_entity.dxf.radius = obj.radius
+                    obj.dxf_entity.dxf.start_angle = obj.start_angle
+                    obj.dxf_entity.dxf.end_angle = obj.end_angle
+                elif obj.type == "Text":
+                    obj.dxf_entity.dxf.insert = Vec3(obj.x, obj.y, 0)
+                    obj.dxf_entity.dxf.text = obj.text
+                    obj.dxf_entity.dxf.height = obj.height
 
     def load_dxf_entities(self):
         self.scene.clear()
@@ -1001,38 +993,6 @@ class CadWindow(QMainWindow):
         except Exception as e:
             print(f"Error adding entity {entity.dxftype()}: {e}")
 
-    def save_file(self):
-        if not self.dxf_doc:
-            QMessageBox.warning(self, "Warning", "No document opened.")
-            return
-        fname, _ = QFileDialog.getSaveFileName(self, "Save DXF", "", "DXF Files (*.dxf)")
-        if not fname:
-            return
-        try:
-            for obj in self.obj_map.values():
-                if obj.dxf_entity:
-                    if obj.type == "Point":
-                        obj.dxf_entity.dxf.location = Vec3(obj.x, obj.y, 0)
-                    elif obj.type == "Line":
-                        obj.dxf_entity.dxf.start = Vec3(obj.x1, obj.y1, 0)
-                        obj.dxf_entity.dxf.end = Vec3(obj.x2, obj.y2, 0)
-                    elif obj.type == "Circle":
-                        obj.dxf_entity.dxf.center = Vec3(obj.cx, obj.cy, 0)
-                        obj.dxf_entity.dxf.radius = obj.radius
-                    elif obj.type == "Arc":
-                        obj.dxf_entity.dxf.center = Vec3(obj.cx, obj.cy, 0)
-                        obj.dxf_entity.dxf.radius = obj.radius
-                        obj.dxf_entity.dxf.start_angle = obj.start_angle
-                        obj.dxf_entity.dxf.end_angle = obj.end_angle
-                    elif obj.type == "Text":
-                        obj.dxf_entity.dxf.insert = Vec3(obj.x, obj.y, 0)
-                        obj.dxf_entity.dxf.text = obj.text
-                        obj.dxf_entity.dxf.height = obj.height
-            self.dxf_doc.saveas(fname)
-            QMessageBox.information(self, "Saved", f"File saved to {fname}")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Save failed:\n{str(e)}")
-
     def on_object_selected(self, item):
         text = item.text()
         for obj in self.obj_map.values():
@@ -1065,125 +1025,47 @@ class CadWindow(QMainWindow):
         item = selected[0]
         for obj in self.obj_map.values():
             if obj.graphics_item == item:
-                self.edit_object(obj)
-                break
-
-    def edit_properties(self):
-        selected = self.scene.selectedItems()
-        if not selected:
-            QMessageBox.information(self, "Properties", "No object selected.")
-            return
-        item = selected[0]
-        for obj in self.obj_map.values():
-            if obj.graphics_item == item:
-                dlg = EditPropertiesDialog(obj, self)
+                dlg = PropertyDialog(obj, self)
                 if dlg.exec_():
-                    values = dlg.get_values()
-                    # Применяем к DXF сущности
-                    if obj.dxf_entity:
-                        obj.dxf_entity.dxf.lineweight = int(values['linewidth']*100)
-                        obj.dxf_entity.dxf.linetype = values['linetype']
-                    # Обновляем отображение
-                    if hasattr(obj.graphics_item, 'update_pen'):
-                        obj.graphics_item.update_pen()
+                    pass
                 break
 
-    def edit_object(self, obj):
-        if obj.type == "Point":
-            dlg = QDialog(self)
-            dlg.setWindowTitle("Edit Point")
-            layout = QFormLayout(dlg)
-            x_edit = QLineEdit(str(obj.x))
-            y_edit = QLineEdit(str(obj.y))
-            layout.addRow("X:", x_edit)
-            layout.addRow("Y:", y_edit)
-            btn = QPushButton("OK")
-            btn.clicked.connect(dlg.accept)
-            layout.addRow(btn)
-            if dlg.exec_():
-                obj.x = float(x_edit.text())
-                obj.y = float(y_edit.text())
-                obj.graphics_item.setPos(obj.x, obj.y)
-                if obj.dxf_entity:
-                    obj.dxf_entity.dxf.location = Vec3(obj.x, obj.y, 0)
-        elif obj.type == "Line":
-            dlg = QDialog(self)
-            dlg.setWindowTitle("Edit Line")
-            layout = QFormLayout(dlg)
-            x1_edit = QLineEdit(str(obj.x1))
-            y1_edit = QLineEdit(str(obj.y1))
-            x2_edit = QLineEdit(str(obj.x2))
-            y2_edit = QLineEdit(str(obj.y2))
-            layout.addRow("X1:", x1_edit)
-            layout.addRow("Y1:", y1_edit)
-            layout.addRow("X2:", x2_edit)
-            layout.addRow("Y2:", y2_edit)
-            btn = QPushButton("OK")
-            btn.clicked.connect(dlg.accept)
-            layout.addRow(btn)
-            if dlg.exec_():
-                obj.x1 = float(x1_edit.text())
-                obj.y1 = float(y1_edit.text())
-                obj.x2 = float(x2_edit.text())
-                obj.y2 = float(y2_edit.text())
-                obj.graphics_item.update_from_obj()
-                if obj.dxf_entity:
-                    obj.dxf_entity.dxf.start = Vec3(obj.x1, obj.y1, 0)
-                    obj.dxf_entity.dxf.end = Vec3(obj.x2, obj.y2, 0)
-        elif obj.type == "Circle":
-            dlg = QDialog(self)
-            dlg.setWindowTitle("Edit Circle")
-            layout = QFormLayout(dlg)
-            cx_edit = QLineEdit(str(obj.cx))
-            cy_edit = QLineEdit(str(obj.cy))
-            r_edit = QLineEdit(str(obj.radius))
-            layout.addRow("Center X:", cx_edit)
-            layout.addRow("Center Y:", cy_edit)
-            layout.addRow("Radius:", r_edit)
-            btn = QPushButton("OK")
-            btn.clicked.connect(dlg.accept)
-            layout.addRow(btn)
-            if dlg.exec_():
-                obj.cx = float(cx_edit.text())
-                obj.cy = float(cy_edit.text())
-                obj.radius = float(r_edit.text())
-                obj.graphics_item.update_from_obj()
-                if obj.dxf_entity:
-                    obj.dxf_entity.dxf.center = Vec3(obj.cx, obj.cy, 0)
-                    obj.dxf_entity.dxf.radius = obj.radius
-        elif obj.type == "Text":
-            dlg = QDialog(self)
-            dlg.setWindowTitle("Edit Text")
-            layout = QFormLayout(dlg)
-            text_edit = QLineEdit(obj.text)
-            x_edit = QLineEdit(str(obj.x))
-            y_edit = QLineEdit(str(obj.y))
-            h_edit = QLineEdit(str(obj.height))
-            layout.addRow("Text:", text_edit)
-            layout.addRow("X:", x_edit)
-            layout.addRow("Y:", y_edit)
-            layout.addRow("Height:", h_edit)
-            btn = QPushButton("OK")
-            btn.clicked.connect(dlg.accept)
-            layout.addRow(btn)
-            if dlg.exec_():
-                obj.text = text_edit.text()
-                obj.x = float(x_edit.text())
-                obj.y = float(y_edit.text())
-                obj.height = float(h_edit.text())
-                obj.graphics_item.setPlainText(obj.text)
-                obj.graphics_item.setPos(obj.x, obj.y)
-                obj.graphics_item.setFont(QFont("Arial", int(obj.height)))
-                if obj.dxf_entity:
-                    obj.dxf_entity.dxf.insert = Vec3(obj.x, obj.y, 0)
-                    obj.dxf_entity.dxf.text = obj.text
-                    obj.dxf_entity.dxf.height = obj.height
-
-    # ------------------ Добавление новых примитивов ------------------
     def add_line(self, x1, y1, x2, y2):
         entity = self.dxf_modelspace.add_line((x1, y1), (x2, y2))
         obj = LineObject(x1, y1, x2, y2, entity)
         item = GraphicsLine(obj)
+        # Применить текущий стиль
+        pen = item.pen()
+        pen.setColor(self.current_line_color)
+        pen.setWidthF(float(self.line_width_edit.text()))
+        lt = self.line_type_combo.currentText()
+        if lt == "Dash":
+            pen.setStyle(Qt.DashLine)
+        elif lt == "DashDot":
+            pen.setStyle(Qt.DashDotLine)
+        else:
+            pen.setStyle(Qt.SolidLine)
+        item.setPen(pen)
+        # Сохранить в DXF
+        try:
+            entity.dxf.rgb = (self.current_line_color.red(), self.current_line_color.green(), self.current_line_color.blue())
+        except AttributeError:
+            # индекс цвета
+            r,g,b = self.current_line_color.red(), self.current_line_color.green(), self.current_line_color.blue()
+            if (r,g,b) == (255,0,0): idx=1
+            elif (r,g,b) == (255,255,0): idx=2
+            elif (r,g,b) == (0,255,0): idx=3
+            elif (r,g,b) == (0,255,255): idx=4
+            elif (r,g,b) == (0,0,255): idx=5
+            elif (r,g,b) == (255,0,255): idx=6
+            else: idx=7
+            entity.dxf.color = idx
+        if lt == "Dash":
+            entity.dxf.linetype = "DASHED"
+        elif lt == "DashDot":
+            entity.dxf.linetype = "DASHDOT"
+        else:
+            entity.dxf.linetype = "CONTINUOUS"
         self.scene.addItem(item)
         obj.graphics_item = item
         self.obj_map[entity] = obj
@@ -1193,6 +1075,35 @@ class CadWindow(QMainWindow):
         entity = self.dxf_modelspace.add_circle((cx, cy), r)
         obj = CircleObject(cx, cy, r, entity)
         item = GraphicsCircle(obj)
+        pen = item.pen()
+        pen.setColor(self.current_line_color)
+        pen.setWidthF(float(self.line_width_edit.text()))
+        lt = self.line_type_combo.currentText()
+        if lt == "Dash":
+            pen.setStyle(Qt.DashLine)
+        elif lt == "DashDot":
+            pen.setStyle(Qt.DashDotLine)
+        else:
+            pen.setStyle(Qt.SolidLine)
+        item.setPen(pen)
+        try:
+            entity.dxf.rgb = (self.current_line_color.red(), self.current_line_color.green(), self.current_line_color.blue())
+        except AttributeError:
+            r,g,b = self.current_line_color.red(), self.current_line_color.green(), self.current_line_color.blue()
+            if (r,g,b) == (255,0,0): idx=1
+            elif (r,g,b) == (255,255,0): idx=2
+            elif (r,g,b) == (0,255,0): idx=3
+            elif (r,g,b) == (0,255,255): idx=4
+            elif (r,g,b) == (0,0,255): idx=5
+            elif (r,g,b) == (255,0,255): idx=6
+            else: idx=7
+            entity.dxf.color = idx
+        if lt == "Dash":
+            entity.dxf.linetype = "DASHED"
+        elif lt == "DashDot":
+            entity.dxf.linetype = "DASHDOT"
+        else:
+            entity.dxf.linetype = "CONTINUOUS"
         self.scene.addItem(item)
         obj.graphics_item = item
         self.obj_map[entity] = obj
@@ -1203,6 +1114,35 @@ class CadWindow(QMainWindow):
         entity = self.dxf_modelspace.add_lwpolyline(points, close=True)
         obj = RectObject(x1, y1, x2, y2, entity)
         item = GraphicsRect(obj)
+        pen = item.pen()
+        pen.setColor(self.current_line_color)
+        pen.setWidthF(float(self.line_width_edit.text()))
+        lt = self.line_type_combo.currentText()
+        if lt == "Dash":
+            pen.setStyle(Qt.DashLine)
+        elif lt == "DashDot":
+            pen.setStyle(Qt.DashDotLine)
+        else:
+            pen.setStyle(Qt.SolidLine)
+        item.setPen(pen)
+        try:
+            entity.dxf.rgb = (self.current_line_color.red(), self.current_line_color.green(), self.current_line_color.blue())
+        except AttributeError:
+            r,g,b = self.current_line_color.red(), self.current_line_color.green(), self.current_line_color.blue()
+            if (r,g,b) == (255,0,0): idx=1
+            elif (r,g,b) == (255,255,0): idx=2
+            elif (r,g,b) == (0,255,0): idx=3
+            elif (r,g,b) == (0,255,255): idx=4
+            elif (r,g,b) == (0,0,255): idx=5
+            elif (r,g,b) == (255,0,255): idx=6
+            else: idx=7
+            entity.dxf.color = idx
+        if lt == "Dash":
+            entity.dxf.linetype = "DASHED"
+        elif lt == "DashDot":
+            entity.dxf.linetype = "DASHDOT"
+        else:
+            entity.dxf.linetype = "CONTINUOUS"
         self.scene.addItem(item)
         obj.graphics_item = item
         self.obj_map[entity] = obj
@@ -1212,6 +1152,35 @@ class CadWindow(QMainWindow):
         entity = self.dxf_modelspace.add_arc((cx, cy), r, start_angle, end_angle)
         obj = ArcObject(cx, cy, r, start_angle, end_angle, entity)
         item = GraphicsArc(obj)
+        pen = item.pen()
+        pen.setColor(self.current_line_color)
+        pen.setWidthF(float(self.line_width_edit.text()))
+        lt = self.line_type_combo.currentText()
+        if lt == "Dash":
+            pen.setStyle(Qt.DashLine)
+        elif lt == "DashDot":
+            pen.setStyle(Qt.DashDotLine)
+        else:
+            pen.setStyle(Qt.SolidLine)
+        item.setPen(pen)
+        try:
+            entity.dxf.rgb = (self.current_line_color.red(), self.current_line_color.green(), self.current_line_color.blue())
+        except AttributeError:
+            r,g,b = self.current_line_color.red(), self.current_line_color.green(), self.current_line_color.blue()
+            if (r,g,b) == (255,0,0): idx=1
+            elif (r,g,b) == (255,255,0): idx=2
+            elif (r,g,b) == (0,255,0): idx=3
+            elif (r,g,b) == (0,255,255): idx=4
+            elif (r,g,b) == (0,0,255): idx=5
+            elif (r,g,b) == (255,0,255): idx=6
+            else: idx=7
+            entity.dxf.color = idx
+        if lt == "Dash":
+            entity.dxf.linetype = "DASHED"
+        elif lt == "DashDot":
+            entity.dxf.linetype = "DASHDOT"
+        else:
+            entity.dxf.linetype = "CONTINUOUS"
         self.scene.addItem(item)
         obj.graphics_item = item
         self.obj_map[entity] = obj
@@ -1222,18 +1191,55 @@ class CadWindow(QMainWindow):
         entity.dxf.insert = (x, y, 0)
         obj = TextObject(x, y, text, height, entity)
         item = GraphicsText(obj)
+        # Для текста не применяем стиль линии, а только цвет шрифта
+        item.setDefaultTextColor(self.current_line_color)
+        try:
+            entity.dxf.rgb = (self.current_line_color.red(), self.current_line_color.green(), self.current_line_color.blue())
+        except AttributeError:
+            r,g,b = self.current_line_color.red(), self.current_line_color.green(), self.current_line_color.blue()
+            if (r,g,b) == (255,0,0): idx=1
+            elif (r,g,b) == (255,255,0): idx=2
+            elif (r,g,b) == (0,255,0): idx=3
+            elif (r,g,b) == (0,255,255): idx=4
+            elif (r,g,b) == (0,0,255): idx=5
+            elif (r,g,b) == (255,0,255): idx=6
+            else: idx=7
+            entity.dxf.color = idx
         self.scene.addItem(item)
         obj.graphics_item = item
         self.obj_map[entity] = obj
         self.list_widget.addItem(f"Text: {text[:20]}")
 
-    def add_dimension(self, dim_type, points, offset=2):
-        obj = DimensionObject(dim_type, points, offset, None)
+    def add_dimension(self, p1, p2, dim_type="Linear", offset=2):
+        obj = DimensionObject(p1, p2, offset, dim_type, None)
         item = GraphicsDimension(obj)
         self.scene.addItem(item)
         obj.graphics_item = item
-        # Не сохраняем в DXF для простоты
         self.list_widget.addItem(f"Dimension ({dim_type})")
+
+    def add_radius_dim(self, center, radius):
+        obj = DimensionObject(center, center, 0, "Radius", None)
+        obj.radius = radius
+        item = GraphicsDimension(obj)
+        self.scene.addItem(item)
+        obj.graphics_item = item
+        self.list_widget.addItem(f"Radius Dimension R{radius:.2f}")
+
+    def add_diameter_dim(self, center, diameter):
+        obj = DimensionObject(center, center, 0, "Diameter", None)
+        obj.diameter = diameter
+        item = GraphicsDimension(obj)
+        self.scene.addItem(item)
+        obj.graphics_item = item
+        self.list_widget.addItem(f"Diameter Dimension Ø{diameter:.2f}")
+
+    def add_angular_dim(self, vertex, angle):
+        obj = DimensionObject(vertex, vertex, 0, "Angular", None)
+        obj.angle = angle
+        item = GraphicsDimension(obj)
+        self.scene.addItem(item)
+        obj.graphics_item = item
+        self.list_widget.addItem(f"Angular Dimension {angle:.1f}°")
 
 def main():
     app = QApplication(sys.argv)

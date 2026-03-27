@@ -145,6 +145,12 @@ class CadView(QGraphicsView):
             super().mousePressEvent(event)
             return
         if self.tool == "Trim":
+            # Обработка Trim при клике левой кнопкой мыши
+            if event.button() == Qt.LeftButton and self.parent_window:
+                pos = self.mapToScene(event.pos())
+                item = self.scene().itemAt(pos, QTransform())
+                if item and hasattr(item, 'line') and self.parent_window:
+                    self.parent_window.trim_object(item)
             return
 
         pos = self.mapToScene(event.pos())

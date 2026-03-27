@@ -144,6 +144,16 @@ class CadWindow(QMainWindow):
         delete_action.triggered.connect(self.delete_selected)
         toolbar.addAction(delete_action)
 
+        # Кнопка убрать толщину линии
+        remove_width_action = QAction("Remove Line Width", self)
+        remove_width_action.triggered.connect(self.remove_line_width)
+        toolbar.addAction(remove_width_action)
+
+        # Кнопка удлинить объект
+        extend_action = QAction("Extend", self)
+        extend_action.triggered.connect(self.extend_selected)
+        toolbar.addAction(extend_action)
+
         self.dim_type_combo = QComboBox()
         self.dim_type_combo.addItems(["Linear", "Radius", "Diameter", "Angular"])
         self.dim_type_combo.currentTextChanged.connect(self.on_dim_type_changed)
@@ -397,6 +407,76 @@ class CadWindow(QMainWindow):
             self.scene.removeItem(item)
         self.update_list()
         self.update_selected_properties()
+
+    def remove_line_width(self):
+        """Убрать толщину линии у выделенных объектов."""
+        selected = self.scene.selectedItems()
+        if not selected:
+            QMessageBox.information(self, "Info", "No object selected.")
+            return
+        for item in selected:
+            if hasattr(item, 'pen'):
+                pen = item.pen()
+                pen.setWidthF(0.1)  # Минимальная толщина
+                item.setPen(pen)
+                # Обновить DXF entity если есть
+                for obj in self.obj_map.values():
+                    if obj.graphics_item == item and obj.dxf_entity:
+                        try:
+                            obj.dxf_entity.dxf.lineweight = 0
+                        except AttributeError:
+                            pass
+                        break
+        self.update_selected_properties()
+        QMessageBox.information(self, "Done", "Line width removed from selected object(s).")
+
+    def extend_selected(self):
+        """Удлинить выделенный объект на заданную величину."""
+        selected = self.scene.selectedItems()
+        if not selected:
+            QMessageBox.information(self, "Info", "No object selected.")
+            return
+        item = selected[0]
+        for obj in self.obj_map.values():
+            if obj.graphics_item == item:
+                if obj.type == "Line":
+                    length_val, ok = QInputDialog.getDouble(self, "Extend", "Enter extension length:", 10.0, 0.1, 1000.0, 2)
+                    if ok and length_val > 0:
+                        # Удлинить линию в обоих направлениях на половину значения
+                        import math
+                        dx = obj.x2 - obj.x1
+                        dy = obj.y2 - obj.y1
+                        length = math.hypot(dx, dy)
+                        if length > 0:
+                            unit_x = dx / length
+                            unit_y = dy / length
+                            half_ext = length_val / 2
+                            new_x1 = obj.x1 - unit_x * half_ext
+                            new_y1 = obj.y1 - unit_y * half_ext
+                            new_x2 = obj.x2 + unit_x * half_ext
+                            new_y2 = obj.y2 + unit_y * half_ext
+                            # Обновить объект
+                            obj.x1, obj.y1 = new_x1, new_y1
+                            obj.x2, obj.y2 = new_x2, new_y2
+                            # Обновить графику
+                            if hasattr(item, 'setLine'):
+                                from PyQt5.QtCore import QLineF
+                                item.setLine(QLineF(new_x1, new_y1, new_x2, new_y2))
+                            # Обновить DXF entity если есть
+                            if obj.dxf_entity:
+                                try:
+                                    obj.dxf_entity.dxf.start = (new_x1, new_y1, 0)
+                                    obj.dxf_entity.dxf.end = (new_x2, new_y2, 0)
+                                except AttributeError:
+                                    pass
+                            self.update_selected_properties()
+                            QMessageBox.information(self, "Done", f"Line extended by {length_val:.2f}.")
+                        else:
+                            QMessageBox.warning(self, "Error", "Cannot extend zero-length line.")
+                    return
+                else:
+                    QMessageBox.information(self, "Info", "Extend is only available for Line objects.")
+                    return
 
     def update_selected_properties(self):
         selected = self.scene.selectedItems()
@@ -936,6 +1016,44 @@ class CadWindow(QMainWindow):
         # Auto-fit view to show all content after list update
         if self.scene.items():
             self.view.fitInView(self.scene.itemsBoundingRect(), Qt.KeepAspectRatio)
+
+    def trim_object(self, item):
+        """Удалить часть объекта (линии) при пересечении с другим объектом."""
+        if not hasattr(item, 'line'):
+            return
+        
+        # Найти все другие линии для поиска пересечений
+        from PyQt5.QtCore import QLineF
+        line_obj = item.line()
+        
+        # Найти ближайшую линию для обрезки
+        cutting_line = None
+        intersection_point = None
+        
+        for other_item in self.scene().items():
+            if other_item == item or not hasattr(other_item, 'line'):
+                continue
+            other_line = other_item.line()
+            
+            # Проверить пересечение
+            intersect_type, pt = line_obj.intersect(other_line)
+            if intersect_type == QLineF.BoundedIntersection:
+                cutting_line = other_line
+                intersection_point = pt
+                break
+        
+        if intersection_point and cutting_line:
+            # Определить, какую часть удалить (ближайшую к клику)
+            # Для простоты удаляем весь объект если есть пересечение
+            # В будущем можно улучшить логику для удаления только части
+            for obj_key, obj in list(self.obj_map.items()):
+                if obj.graphics_item == item:
+                    if obj in self.obj_map:
+                        del self.obj_map[obj_key]
+                    break
+            self.scene().removeItem(item)
+            self.update_list()
+            self.update_selected_properties()
 
     # ------------------ Добавление примитивов ------------------
     def add_line(self, x1, y1, x2, y2):

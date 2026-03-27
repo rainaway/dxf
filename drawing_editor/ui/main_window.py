@@ -28,12 +28,15 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QInputDialog,
     QApplication,
+    QColorDialog,
+    QLineEdit,
 )
 from PyQt5.QtCore import Qt, QRectF, QPointF, QLineF
 from PyQt5.QtGui import QPen, QBrush, QColor, QFont, QPainter, QTransform
 from PyQt5.QtPrintSupport import QPrinter
 import ezdxf
 from ezdxf.math import Vec3
+import json
 
 from drawing_editor.core.models import (
     GraphicObject,
@@ -91,12 +94,15 @@ class CadWindow(QMainWindow):
         save_as_action.triggered.connect(self.save_as_file)
         export_pdf_action = QAction("Export PDF", self)
         export_pdf_action.triggered.connect(self.export_pdf)
+        export_html_action = QAction("Export HTML", self)
+        export_html_action.triggered.connect(self.export_html)
 
         toolbar.addAction(new_action)
         toolbar.addAction(open_action)
         toolbar.addAction(save_action)
         toolbar.addAction(save_as_action)
         toolbar.addAction(export_pdf_action)
+        toolbar.addAction(export_html_action)
         toolbar.addSeparator()
 
         select_action = QAction("Select", self)
@@ -460,6 +466,257 @@ class CadWindow(QMainWindow):
         painter.end()
 
         QMessageBox.information(self, "Exported", f"PDF saved to {fname}")
+
+    def export_html(self):
+        """Экспорт текущей сцены в HTML с границами рабочей области А4."""
+        if not self.scene.items():
+            QMessageBox.warning(self, "Warning", "Nothing to export.")
+            return
+        fname, _ = QFileDialog.getSaveFileName(self, "Export HTML", "", "HTML Files (*.html)")
+        if not fname:
+            return
+        
+        # Размеры А4 в мм (по умолчанию)
+        a4_width_mm = 210
+        a4_height_mm = 297
+        # Преобразуем в пиксели (при 96 DPI)
+        mm_to_px = 96 / 25.4
+        a4_width_px = a4_width_mm * mm_to_px
+        a4_height_px = a4_height_mm * mm_to_px
+        
+        bbox = self.scene.itemsBoundingRect()
+        if bbox.isEmpty():
+            QMessageBox.warning(self, "Warning", "Empty drawing.")
+            return
+        
+        # Собираем данные объектов для экспорта
+        objects_data = []
+        for obj in self.obj_map.values():
+            item = obj.graphics_item
+            pen = item.pen() if hasattr(item, 'pen') else QPen(QColor(0, 0, 0))
+            color = pen.color().name() if hasattr(pen, 'color') else "#000000"
+            width = pen.widthF() if hasattr(pen, 'widthF') else 0.2
+            
+            obj_data = {
+                'type': obj.type,
+                'color': color,
+                'width': width,
+            }
+            
+            if obj.type == "Line":
+                obj_data['x1'] = obj.x1
+                obj_data['y1'] = obj.y1
+                obj_data['x2'] = obj.x2
+                obj_data['y2'] = obj.y2
+            elif obj.type == "Circle":
+                obj_data['cx'] = obj.cx
+                obj_data['cy'] = obj.cy
+                obj_data['radius'] = obj.radius
+            elif obj.type == "Rectangle":
+                obj_data['x1'] = obj.x1
+                obj_data['y1'] = obj.y1
+                obj_data['x2'] = obj.x2
+                obj_data['y2'] = obj.y2
+            elif obj.type == "Arc":
+                obj_data['cx'] = obj.cx
+                obj_data['cy'] = obj.cy
+                obj_data['radius'] = obj.radius
+                obj_data['start_angle'] = obj.start_angle
+                obj_data['end_angle'] = obj.end_angle
+            elif obj.type == "Text":
+                obj_data['x'] = obj.x
+                obj_data['y'] = obj.y
+                obj_data['text'] = obj.text
+            elif obj.type == "Dimension":
+                obj_data['x1'] = obj.x1
+                obj_data['y1'] = obj.y1
+                obj_data['x2'] = obj.x2
+                obj_data['y2'] = obj.y2
+                obj_data['dim_type'] = getattr(obj, 'dim_type', 'Linear')
+            
+            objects_data.append(obj_data)
+        
+        # Генерируем HTML
+        html_content = self._generate_html(objects_data, bbox, a4_width_px, a4_height_px)
+        
+        try:
+            with open(fname, 'w', encoding='utf-8') as f:
+                f.write(html_content)
+            QMessageBox.information(self, "Exported", f"HTML saved to {fname}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Export failed:\n{str(e)}")
+    
+    def _generate_html(self, objects_data, bbox, a4_width_px, a4_height_px):
+        """Генерация HTML содержимого для экспорта."""
+        # Вычисляем масштаб для отображения
+        margin = 20
+        view_width = a4_width_px + margin * 2
+        view_height = a4_height_px + margin * 2
+        
+        # Определяем масштабирование для fit
+        draw_width = bbox.width() if bbox.width() > 0 else 1
+        draw_height = bbox.height() if bbox.height() > 0 else 1
+        scale = min(a4_width_px / draw_width, a4_height_px / draw_height) * 0.9
+        
+        # Центрируем чертеж на странице А4
+        offset_x = margin + (a4_width_px - draw_width * scale) / 2
+        offset_y = margin + (a4_height_px - draw_height * scale) / 2
+        
+        objects_json = json.dumps(objects_data)
+        
+        html = f'''<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CAD Drawing Export</title>
+    <style>
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+        body {{
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            min-height: 100vh;
+            padding: 20px;
+        }}
+        .container {{
+            background-color: white;
+            box-shadow: 0 0 10px rgba(0,0,0,0.3);
+        }}
+        svg {{
+            display: block;
+        }}
+        .a4-border {{
+            fill: none;
+            stroke: #ff0000;
+            stroke-width: 2;
+            stroke-dasharray: 5,5;
+        }}
+        .drawing-item {{
+            vector-effect: non-scaling-stroke;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <svg id="cad-svg" width="{view_width}" height="{view_height}" viewBox="0 0 {view_width} {view_height}">
+            <!-- Границы рабочей области А4 -->
+            <rect class="a4-border" x="{margin}" y="{margin}" width="{a4_width_px}" height="{a4_height_px}" />
+            <!-- Объекты чертежа будут добавлены через JS -->
+        </svg>
+    </div>
+    <script>
+        (function() {{
+            const objects = {objects_json};
+            const svg = document.getElementById('cad-svg');
+            const scale = {scale};
+            const offsetX = {offset_x};
+            const offsetY = {offset_y};
+            const bboxX = {bbox.left()};
+            const bboxY = {bbox.top()};
+            
+            function transformX(x) {{
+                return offsetX + (x - bboxX) * scale;
+            }}
+            
+            function transformY(y) {{
+                // SVG Y ось направлена вниз, инвертируем для CAD координат
+                return offsetY + (y - bboxY) * scale;
+            }}
+            
+            objects.forEach(obj => {{
+                let element;
+                const attrs = {{
+                    class: 'drawing-item',
+                    stroke: obj.color || '#000000',
+                    'stroke-width': obj.width || 0.2,
+                    fill: 'none'
+                }};
+                
+                switch(obj.type) {{
+                    case 'Line':
+                        element = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                        element.setAttribute('x1', transformX(obj.x1));
+                        element.setAttribute('y1', transformY(obj.y1));
+                        element.setAttribute('x2', transformX(obj.x2));
+                        element.setAttribute('y2', transformY(obj.y2));
+                        break;
+                    
+                    case 'Circle':
+                        element = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                        element.setAttribute('cx', transformX(obj.cx));
+                        element.setAttribute('cy', transformY(obj.cy));
+                        element.setAttribute('r', obj.radius * scale);
+                        break;
+                    
+                    case 'Rectangle':
+                        const rectX = Math.min(obj.x1, obj.x2);
+                        const rectY = Math.min(obj.y1, obj.y2);
+                        const rectW = Math.abs(obj.x2 - obj.x1);
+                        const rectH = Math.abs(obj.y2 - obj.y1);
+                        element = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                        element.setAttribute('x', transformX(rectX));
+                        element.setAttribute('y', transformY(rectY));
+                        element.setAttribute('width', rectW * scale);
+                        element.setAttribute('height', rectH * scale);
+                        break;
+                    
+                    case 'Arc':
+                        const startRad = obj.start_angle * Math.PI / 180;
+                        const endRad = obj.end_angle * Math.PI / 180;
+                        const cx = transformX(obj.cx);
+                        const cy = transformY(obj.cy);
+                        const r = obj.radius * scale;
+                        const x1 = cx + r * Math.cos(startRad);
+                        const y1 = cy + r * Math.sin(startRad);
+                        const x2 = cx + r * Math.cos(endRad);
+                        const y2 = cy + r * Math.sin(endRad);
+                        const largeArcFlag = Math.abs(obj.end_angle - obj.start_angle) > 180 ? 1 : 0;
+                        const d = `M ${{x1}} ${{y1}} A ${{r}} ${{r}} 0 ${{largeArcFlag}} 1 ${{x2}} ${{y2}}`;
+                        element = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                        element.setAttribute('d', d);
+                        break;
+                    
+                    case 'Text':
+                        element = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                        element.setAttribute('x', transformX(obj.x));
+                        element.setAttribute('y', transformY(obj.y));
+                        element.setAttribute('fill', obj.color || '#000000');
+                        element.setAttribute('font-size', '12');
+                        element.setAttribute('font-family', 'Arial');
+                        element.textContent = obj.text || '';
+                        break;
+                    
+                    case 'Dimension':
+                        element = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                        element.setAttribute('x1', transformX(obj.x1));
+                        element.setAttribute('y1', transformY(obj.y1));
+                        element.setAttribute('x2', transformX(obj.x2));
+                        element.setAttribute('y2', transformY(obj.y2));
+                        element.setAttribute('stroke-dasharray', '2,2');
+                        break;
+                }}
+                
+                if (element) {{
+                    for (const [key, value] of Object.entries(attrs)) {{
+                        if (!element.hasAttribute(key) && key !== 'fill') {{
+                            element.setAttribute(key, value);
+                        }}
+                    }}
+                    svg.appendChild(element);
+                }}
+            }});
+        }})();
+    </script>
+</body>
+</html>'''
+        return html
 
     def _sync_dxf(self):
         for obj in self.obj_map.values():

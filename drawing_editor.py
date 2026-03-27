@@ -325,7 +325,7 @@ class CadView(QGraphicsView):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setRenderHint(QPainter.Antialiasing)
-        self.setDragMode(QGraphicsView.RubberBandDrag)
+        self.setDragMode(QGraphicsView.NoDrag)  # Отключаем стандартный RubberBandDrag
         self.tool = "Select"
         self.start_point = None
         self.temp_item = None
@@ -341,76 +341,48 @@ class CadView(QGraphicsView):
         self._zoom_factor = 1.2
         self._min_zoom = 0.1
         self._max_zoom = 10.0
+        # Перемещение области (панорамирование)
+        self._panning = False
+        self._last_pan_pos = None
 
     def wheelEvent(self, event):
         """Масштабирование колесом мыши"""
-        if event.modifiers() & Qt.ControlModifier or True:  # Всегда масштабировать колесом
-            delta = event.angleDelta().y()
-            if delta > 0:
-                factor = self._zoom_factor
-            else:
-                factor = 1 / self._zoom_factor
-            
-            current_zoom = self.transform().m11()
-            new_zoom = current_zoom * factor
-            
-            if self._min_zoom <= new_zoom <= self._max_zoom:
-                # Масштабирование относительно позиции курсора
-                pos = event.pos()
-                before_pos = self.mapToScene(pos)
-                self.scale(factor, factor)
-                after_pos = self.mapToScene(pos)
-                # Корректировка позиции, чтобы точка под курсором осталась на месте
-                self.translate(after_pos.x() - before_pos.x(), after_pos.y() - before_pos.y())
-            event.accept()
+        delta = event.angleDelta().y()
+        if delta > 0:
+            factor = self._zoom_factor
         else:
-            super().wheelEvent(event)
-
-    def keyPressEvent(self, event):
-        """Обработка клавиши ESC для отмены текущей команды и Delete для удаления"""
-        if event.key() == Qt.Key_Escape:
-            if self.tool != "Select":
-                # Отмена текущей операции рисования
-                if self.temp_item:
-                    self.scene().removeItem(self.temp_item)
-                    self.temp_item = None
-                self.start_point = None
-                # Переключение в режим выбора
-                self.parent_window.set_tool("Select")
-            event.accept()
-        elif event.key() == Qt.Key_Delete:
-            # Удаление выделенных объектов
-            if self.tool == "Select":
-                self.parent_window.delete_selected()
-            event.accept()
-        else:
-            super().keyPressEvent(event)
-
-    def setScene(self, scene):
-        super().setScene(scene)
-        if self.snap_manager is None:
-            self.snap_manager = SnapManager(scene)
-        else:
-            self.snap_manager.scene = scene
-
-    def set_tool(self, tool):
-        self.tool = tool
-        self.start_point = None
-        if self.temp_item:
-            self.scene().removeItem(self.temp_item)
-            self.temp_item = None
-        if self.tooltip_item:
-            self.scene().removeItem(self.tooltip_item)
-            self.tooltip_item = None
-        if tool == "Select":
-            self.setCursor(Qt.ArrowCursor)
-        else:
-            self.setCursor(Qt.CrossCursor)
-
-    def set_dim_type(self, dim_type):
-        self.dim_type = dim_type
+            factor = 1 / self._zoom_factor
+        
+        current_zoom = self.transform().m11()
+        new_zoom = current_zoom * factor
+        
+        if self._min_zoom <= new_zoom <= self._max_zoom:
+            # Масштабирование относительно позиции курсора
+            pos = event.pos()
+            before_pos = self.mapToScene(pos)
+            self.scale(factor, factor)
+            after_pos = self.mapToScene(pos)
+            # Корректировка позиции, чтобы точка под курсором осталась на месте
+            self.translate(after_pos.x() - before_pos.x(), after_pos.y() - before_pos.y())
+        event.accept()
 
     def mousePressEvent(self, event):
+        # Обработка нажатия колеса мыши для панорамирования
+        if event.button() == Qt.MiddleButton:
+            self._panning = True
+            self._last_pan_pos = event.pos()
+            self.setCursor(Qt.ClosedHandCursor)
+            event.accept()
+            return
+        
+        # Команда _m (перемещение) - обрабатывается через клавиатуру, но здесь поддержка через флаг
+        if hasattr(self, '_move_mode') and self._move_mode:
+            self._panning = True
+            self._last_pan_pos = event.pos()
+            self.setCursor(Qt.ClosedHandCursor)
+            event.accept()
+            return
+            
         if self.tool == "Select":
             super().mousePressEvent(event)
             return
@@ -449,6 +421,15 @@ class CadView(QGraphicsView):
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        # Обработка панорамирования (перемещения области) при зажатом колесе мыши
+        if self._panning and self._last_pan_pos is not None:
+            delta = event.pos() - self._last_pan_pos
+            self._last_pan_pos = event.pos()
+            # Прокрутка сцены в противоположном направлении движения мыши
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
+            return
+        
         # Подсказка для инструментов рисования (следует за курсором)
         if self.tool != "Select":
             if self.tooltip_item is None:
@@ -456,8 +437,16 @@ class CadView(QGraphicsView):
                 self.tooltip_item.setBrush(QBrush(QColor(0,0,0)))
                 self.tooltip_item.setFont(QFont("Arial", 8))
                 self.scene().addItem(self.tooltip_item)
-            self.tooltip_item.setText(self.tool)
+            
+            # Отображение названия инструмента и координат
             scene_pos = self.mapToScene(event.pos())
+            if self.snap_manager:
+                snapped_pos = self.snap_manager.snap_point(self, event.pos())
+                tooltip_text = f"{self.tool}: ({snapped_pos.x():.2f}, {snapped_pos.y():.2f})"
+            else:
+                tooltip_text = f"{self.tool}: ({scene_pos.x():.2f}, {scene_pos.y():.2f})"
+            
+            self.tooltip_item.setText(tooltip_text)
             self.tooltip_item.setPos(scene_pos.x() + 5, scene_pos.y() - 10)
         else:
             if self.tooltip_item:
@@ -549,6 +538,80 @@ class CadView(QGraphicsView):
             self.hovered_item = None
             self.original_pen = None
             self.original_color = None
+
+    def mouseReleaseEvent(self, event):
+        """Обработка отпускания кнопки мыши для завершения панорамирования"""
+        if event.button() == Qt.MiddleButton:
+            self._panning = False
+            self._last_pan_pos = None
+            self.setCursor(Qt.ArrowCursor)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event):
+        """Обработка клавиши ESC для отмены текущей команды, Delete для удаления и _m для перемещения"""
+        if event.key() == Qt.Key_Escape:
+            # Сброс режима панорамирования если активен
+            if self._panning:
+                self._panning = False
+                self._last_pan_pos = None
+                self.setCursor(Qt.ArrowCursor)
+            elif self.tool != "Select":
+                # Отмена текущей операции рисования
+                if self.temp_item:
+                    self.scene().removeItem(self.temp_item)
+                    self.temp_item = None
+                self.start_point = None
+                # Переключение в режим выбора
+                self.parent_window.set_tool("Select")
+            event.accept()
+        elif event.key() == Qt.Key_Delete:
+            # Удаление выделенных объектов
+            if self.tool == "Select":
+                self.parent_window.delete_selected()
+            event.accept()
+        elif event.key() == Qt.Key_M:
+            # Команда _m - переход в режим перемещения (панорамирования)
+            if self.tool == "Select":
+                self._move_mode = True
+                self.setCursor(Qt.OpenHandCursor)
+                self.parent_window.status_label.setText("Move mode: Click and drag to pan. Press ESC to exit.")
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        """Обработка отпускания клавиш"""
+        if event.key() == Qt.Key_M:
+            self._move_mode = False
+        super().keyReleaseEvent(event)
+
+    def setScene(self, scene):
+        super().setScene(scene)
+        if self.snap_manager is None:
+            self.snap_manager = SnapManager(scene)
+        else:
+            self.snap_manager.scene = scene
+
+    def set_tool(self, tool):
+        self.tool = tool
+        self.start_point = None
+        if self.temp_item:
+            self.scene().removeItem(self.temp_item)
+            self.temp_item = None
+        if self.tooltip_item:
+            self.scene().removeItem(self.tooltip_item)
+            self.tooltip_item = None
+        # Сброс режима перемещения при смене инструмента
+        self._move_mode = False
+        if tool == "Select":
+            self.setCursor(Qt.ArrowCursor)
+        else:
+            self.setCursor(Qt.CrossCursor)
+
+    def set_dim_type(self, dim_type):
+        self.dim_type = dim_type
 
     def finish_drawing(self, pos):
         if self.tool == "Line":
@@ -771,7 +834,8 @@ class CadWindow(QMainWindow):
         edit_button = QPushButton("Edit Selected")
         edit_button.clicked.connect(self.edit_selected)
         layout_left.addWidget(edit_button)
-        delete_button = QPushButton("Delete Selected (Del)")
+        delete_button = QPushButton("Delete Selected")
+        delete_button.setShortcut("Delete")
         delete_button.clicked.connect(self.delete_selected)
         layout_left.addWidget(delete_button)
         left_dock.setWidget(container_left)

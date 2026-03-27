@@ -83,9 +83,13 @@ python drawing_editor.py
 
 ```
 /workspace/
-├── drawing_editor.py    # Main application code
-├── run_editor.bat       # Windows batch launcher
-└── README.md            # This file
+├── drawing_editor.py       # Main application code (1842 lines)
+├── run_editor.bat          # Windows batch launcher
+├── README.md               # This file
+├── IMPROVEMENTS.md         # Detailed improvement suggestions
+└── tests/
+    ├── __init__.py
+    └── test_drawing_editor.py  # Unit tests (40 tests)
 ```
 
 ## Code Architecture
@@ -142,6 +146,35 @@ Potential enhancements for future versions:
 - Undo/redo functionality
 - Export to other formats (SVG, PDF)
 - Grid display and coordinate input
+
+## Testing
+
+The project includes a comprehensive unit test suite covering data models and geometry calculations.
+
+### Running Tests
+
+```bash
+# Run all tests
+python tests/test_drawing_editor.py
+
+# Run with verbose output
+python tests/test_drawing_editor.py -v
+```
+
+### Test Coverage
+
+- **GraphicObject**: Base class initialization
+- **PointObject**: Point creation and properties
+- **LineObject**: Length, midpoint, and angle calculations
+- **CircleObject**: Area, circumference, and point containment
+- **RectObject**: Width, height, area, and center calculations
+- **ArcObject**: Span, length, and area calculations
+- **TextObject**: Text properties and special characters
+- **DimensionObject**: All dimension types (Linear, Radius, Diameter, Angular)
+- **Geometry Calculations**: Distance, normalization, rotation, angles
+- **Snap Logic**: Tolerance checking and closest point detection
+
+**Total**: 40 tests covering core functionality
 
 ## License
 

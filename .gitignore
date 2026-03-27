@@ -1,1 +1,1 @@
-Nothing should be ignored in this case, as only a Python source file (`cad_editor.py`) was added without any build artifacts, dependencies, or temporary files.
+Nothing needs to be added to .gitignore since only a Python source file (`drawing_editor.py`) was modified and no build artifacts, dependencies, or temporary files were detected in the changes.

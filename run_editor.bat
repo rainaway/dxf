@@ -2,29 +2,30 @@
 setlocal
 
 echo ============================================
-echo      Drawing XML Editor Launcher
+echo      Drawing Editor Launcher
 echo ============================================
 echo.
 
-:: Проверка наличия Python
+:: Check for Python
 where python >nul 2>nul
 if %errorlevel% neq 0 (
     echo [ERROR] Python is not installed or not in PATH.
-    echo Please install Python 3.6+ and add it to your system PATH.
+    echo Please install Python 3.8+ and add it to your system PATH.
     pause
     exit /b 1
 )
 
-:: Проверка наличия скрипта
-if not exist "drawing_editor.py" (
-    echo [ERROR] drawing_editor.py not found in current directory.
-    echo Please place this bat file in the same folder as the script.
+:: Check if the main script exists
+if not exist "drawing_editor\main.py" (
+    echo [ERROR] drawing_editor\main.py not found.
+    echo Please place this bat file in the project root directory.
     pause
     exit /b 1
 )
 
-:: Проверка и установка зависимостей
+:: Check and install dependencies
 echo Checking dependencies...
+
 python -c "import PyQt5" >nul 2>nul
 if %errorlevel% neq 0 (
     echo Installing PyQt5...
@@ -36,12 +37,12 @@ if %errorlevel% neq 0 (
     )
 )
 
-python -c "import lxml" >nul 2>nul
+python -c "import ezdxf" >nul 2>nul
 if %errorlevel% neq 0 (
-    echo Installing lxml...
-    pip install lxml
+    echo Installing ezdxf...
+    pip install ezdxf
     if %errorlevel% neq 0 (
-        echo Failed to install lxml. Please install manually: pip install lxml
+        echo Failed to install ezdxf. Please install manually: pip install ezdxf
         pause
         exit /b 1
     )
@@ -50,11 +51,11 @@ if %errorlevel% neq 0 (
 echo Dependencies OK.
 echo.
 
-:: Запуск
+:: Run the application
 echo Starting editor...
-python drawing_editor.py
+python drawing_editor/main.py
 
-:: Пауза после завершения (для просмотра вывода)
+:: Pause after completion
 echo.
 echo Editor closed. Press any key to exit...
 pause >nul

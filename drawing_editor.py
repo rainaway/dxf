@@ -695,6 +695,7 @@ class CadWindow(QMainWindow):
         self.current_file = None
         self._unsaved_changes = False
 
+        # Инициализируем statusbar ДО вызова init_ui, т.к. setup_paper_format использует status_label
         self.init_statusbar()
         self.init_ui()
         self.create_empty_document()   # создаём пустой документ без запроса пути

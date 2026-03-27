@@ -5,7 +5,7 @@ This module provides the SnapManager class which handles snapping to
 geometric features like endpoints, centers, and vertices.
 """
 
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Any
 from functools import lru_cache
 
 from PyQt5.QtCore import QPointF, QRectF

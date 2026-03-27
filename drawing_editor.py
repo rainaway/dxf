@@ -635,8 +635,9 @@ class CadView(QGraphicsView):
         if self.tooltip_item:
             self.scene().removeItem(self.tooltip_item)
             self.tooltip_item = None
-        if self.hint_item:
-            self.hint_item.hide()
+        if self.hint_item and self.hint_item.scene():
+            self.scene().removeItem(self.hint_item)
+            self.hint_item = None
         if self.dimension_label:
             self.scene().removeItem(self.dimension_label)
             self.dimension_label = None
@@ -730,14 +731,14 @@ class CadView(QGraphicsView):
                 self.hint_item.setText(hint)
                 # Размещаем подсказку привязки справа от подсказки примитива, рядом с курсором
                 scene_pos = self.mapToScene(event.pos())
-                tooltip_width = self.tooltip_item.boundingRect().width() if self.tooltip_item else 0
+                tooltip_width = self.tooltip_item.boundingRect().width() if self.tooltip_item and not self.tooltip_item.scene() is None else 0
                 self.hint_item.setPos(scene_pos.x() + 10 + tooltip_width + 5, scene_pos.y() - 20)
                 self.hint_item.show()
             else:
-                if self.hint_item:
+                if self.hint_item and self.hint_item.scene():
                     self.hint_item.hide()
         else:
-            if self.hint_item:
+            if self.hint_item and self.hint_item.scene():
                 self.hint_item.hide()
 
         # Временные объекты и отображение размеров
@@ -1682,8 +1683,8 @@ class CadWindow(QMainWindow):
             painter.scale(scale, scale)
             painter.translate(-bbox.center())
 
-            # Render the scene
-            self.scene.render(painter, target=QRectF(), source=bbox, aspectRatioMode=Qt.KeepAspectRatio)
+            # Render the scene using positional arguments (keyword args not supported in some Qt versions)
+            self.scene.render(painter, QRectF(), bbox, Qt.KeepAspectRatio)
             
             painter.end()
 

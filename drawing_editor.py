@@ -9,8 +9,9 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QGraphicsView, QGraphics
                              QGraphicsTextItem, QGraphicsRectItem, QGraphicsPolygonItem,
                              QGraphicsItemGroup, QInputDialog, QColorDialog, QComboBox,
                              QMenu, QGraphicsSimpleTextItem, QCheckBox, QGroupBox, QHBoxLayout)
-from PyQt5.QtCore import Qt, QRectF, QPointF, QLineF
-from PyQt5.QtGui import QPen, QBrush, QColor, QFont, QPainterPath, QPolygonF, QPainter, QTransform
+from PyQt5.QtPrintSupport import QPrinter, QPrintDialog
+from PyQt5.QtCore import Qt, QRectF, QPointF, QLineF, QMarginsF
+from PyQt5.QtGui import QPen, QBrush, QColor, QFont, QPainterPath, QPolygonF, QPainter, QTransform, QPageLayout, QPageSize
 import ezdxf
 from ezdxf.math import Vec3
 
@@ -336,6 +337,54 @@ class CadView(QGraphicsView):
         self.original_pen = None
         self.original_color = None
         self.setCursor(Qt.ArrowCursor)
+        # Масштабирование
+        self._zoom_factor = 1.2
+        self._min_zoom = 0.1
+        self._max_zoom = 10.0
+
+    def wheelEvent(self, event):
+        """Масштабирование колесом мыши"""
+        if event.modifiers() & Qt.ControlModifier or True:  # Всегда масштабировать колесом
+            delta = event.angleDelta().y()
+            if delta > 0:
+                factor = self._zoom_factor
+            else:
+                factor = 1 / self._zoom_factor
+            
+            current_zoom = self.transform().m11()
+            new_zoom = current_zoom * factor
+            
+            if self._min_zoom <= new_zoom <= self._max_zoom:
+                # Масштабирование относительно позиции курсора
+                pos = event.pos()
+                before_pos = self.mapToScene(pos)
+                self.scale(factor, factor)
+                after_pos = self.mapToScene(pos)
+                # Корректировка позиции, чтобы точка под курсором осталась на месте
+                self.translate(after_pos.x() - before_pos.x(), after_pos.y() - before_pos.y())
+            event.accept()
+        else:
+            super().wheelEvent(event)
+
+    def keyPressEvent(self, event):
+        """Обработка клавиши ESC для отмены текущей команды и Delete для удаления"""
+        if event.key() == Qt.Key_Escape:
+            if self.tool != "Select":
+                # Отмена текущей операции рисования
+                if self.temp_item:
+                    self.scene().removeItem(self.temp_item)
+                    self.temp_item = None
+                self.start_point = None
+                # Переключение в режим выбора
+                self.parent_window.set_tool("Select")
+            event.accept()
+        elif event.key() == Qt.Key_Delete:
+            # Удаление выделенных объектов
+            if self.tool == "Select":
+                self.parent_window.delete_selected()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
 
     def setScene(self, scene):
         super().setScene(scene)
@@ -695,6 +744,21 @@ class CadWindow(QMainWindow):
         toolbar.addWidget(QLabel("Dim type:"))
         toolbar.addWidget(self.dim_type_combo)
         toolbar.addAction(dim_action)
+        toolbar.addSeparator()
+        
+        # Выбор формата бумаги
+        self.paper_format_combo = QComboBox()
+        self.paper_format_combo.addItems(["A0", "A1", "A2", "A3", "A4"])
+        self.paper_format_combo.setCurrentText("A3")
+        self.paper_format_combo.currentTextChanged.connect(self.on_paper_format_changed)
+        toolbar.addWidget(QLabel("Paper:"))
+        toolbar.addWidget(self.paper_format_combo)
+        toolbar.addSeparator()
+        
+        # Кнопка печати/экспорта в PDF
+        print_action = QAction("Print / Export PDF", self)
+        print_action.triggered.connect(self.print_to_pdf)
+        toolbar.addAction(print_action)
 
         # Панель объектов слева
         left_dock = QDockWidget("Objects", self)
@@ -706,6 +770,9 @@ class CadWindow(QMainWindow):
         edit_button = QPushButton("Edit Selected")
         edit_button.clicked.connect(self.edit_selected)
         layout_left.addWidget(edit_button)
+        delete_button = QPushButton("Delete Selected (Del)")
+        delete_button.clicked.connect(self.delete_selected)
+        layout_left.addWidget(delete_button)
         left_dock.setWidget(container_left)
         self.addDockWidget(Qt.LeftDockWidgetArea, left_dock)
 
@@ -755,6 +822,17 @@ class CadWindow(QMainWindow):
         self.current_line_color = QColor(0,0,0)
         self.current_line_width = 0.2
         self.current_line_type = "Solid"
+        
+        # Формат бумаги (по умолчанию A3)
+        self.paper_format = "A3"
+        self.paper_sizes = {
+            "A0": (841, 1189),  # мм
+            "A1": (594, 841),
+            "A2": (420, 594),
+            "A3": (297, 420),
+            "A4": (210, 297)
+        }
+        self.setup_paper_format("A3")
 
     def init_statusbar(self):
         self.status = QStatusBar()
@@ -1048,6 +1126,47 @@ class CadWindow(QMainWindow):
                     pass
                 break
 
+    def delete_selected(self):
+        """Удаление выделенных объектов"""
+        selected = self.scene.selectedItems()
+        if not selected:
+            QMessageBox.information(self, "Delete", "No object selected.")
+            return
+        
+        for item in selected:
+            # Находим соответствующий GraphicObject и удаляем из DXF
+            obj_to_remove = None
+            for entity, obj in list(self.obj_map.items()):
+                if obj.graphics_item == item:
+                    obj_to_remove = obj
+                    # Удаляем из DXF документа
+                    if obj.dxf_entity and self.dxf_modelspace:
+                        try:
+                            self.dxf_modelspace.delete_entity(obj.dxf_entity)
+                        except Exception:
+                            pass
+                    break
+            
+            # Удаляем графический элемент из сцены
+            self.scene.removeItem(item)
+            
+            # Удаляем из списка объектов
+            if obj_to_remove:
+                # Обновляем список в левой панели
+                for i in range(self.list_widget.count()):
+                    list_item = self.list_widget.item(i)
+                    if list_item and list_item.text() == self.object_description(obj_to_remove):
+                        self.list_widget.takeItem(i)
+                        break
+                
+                # Удаляем из obj_map
+                for entity, obj in list(self.obj_map.items()):
+                    if obj == obj_to_remove:
+                        del self.obj_map[entity]
+                        break
+        
+        self.status_label.setText("Object(s) deleted")
+
     # ------------------ Добавление новых примитивов ------------------
     def add_line(self, x1, y1, x2, y2):
         entity = self.dxf_modelspace.add_line((x1, y1), (x2, y2))
@@ -1256,6 +1375,111 @@ class CadWindow(QMainWindow):
         self.scene.addItem(item)
         obj.graphics_item = item
         self.list_widget.addItem(f"Angular Dimension {angle:.1f}°")
+
+    # ------------------ Формат бумаги и печать ------------------
+    def setup_paper_format(self, format_name):
+        """Настройка формата бумаги для рабочей области"""
+        if format_name not in self.paper_sizes:
+            return
+        
+        width_mm, height_mm = self.paper_sizes[format_name]
+        # Конвертируем мм в единицы сцены (предполагаем 1 мм = 1 единица)
+        width = width_mm
+        height = height_mm
+        
+        # Очищаем сцену и устанавливаем новый размер
+        rect = QRectF(0, 0, width, height)
+        self.scene.setSceneRect(rect)
+        
+        # Рисуем рамку бумаги
+        self._draw_paper_border(width, height)
+        
+        self.paper_format = format_name
+        self.status_label.setText(f"Paper format: {format_name} ({width}x{height} mm)")
+    
+    def _draw_paper_border(self, width, height):
+        """Рисует рамку бумаги на сцене"""
+        # Удаляем существующую рамку если есть
+        for item in self.scene.items():
+            if hasattr(item, 'is_paper_border') and item.is_paper_border:
+                self.scene.removeItem(item)
+        
+        # Рисуем новую рамку
+        border_rect = QGraphicsRectItem(0, 0, width, height)
+        border_rect.setPen(QPen(QColor(200, 200, 200), 0.5, Qt.DashLine))
+        border_rect.is_paper_border = True
+        border_rect.setFlag(QGraphicsItem.ItemIsSelectable, False)
+        border_rect.setZValue(-1000)  # Помещаем на задний план
+        self.scene.addItem(border_rect)
+    
+    def on_paper_format_changed(self, format_name):
+        """Обработчик изменения формата бумаги"""
+        self.setup_paper_format(format_name)
+    
+    def print_to_pdf(self):
+        """Печать или экспорт в PDF"""
+        # Диалог выбора файла для сохранения PDF
+        fname, _ = QFileDialog.getSaveFileName(
+            self, 
+            "Export to PDF", 
+            "", 
+            "PDF Files (*.pdf)"
+        )
+        if not fname:
+            return
+        
+        try:
+            # Создаем принтер для PDF
+            printer = QPrinter(QPrinter.HighResolution)
+            printer.setOutputFormat(QPrinter.PdfFormat)
+            printer.setOutputFileName(fname)
+            
+            # Устанавливаем размер страницы согласно выбранному формату
+            width_mm, height_mm = self.paper_sizes[self.paper_format]
+            page_layout = QPageLayout()
+            page_size = QPageSize(QSizeF(width_mm, height_mm), QPageSize.Millimeter)
+            page_layout.setPageSize(page_size)
+            page_layout.setMargins(QMarginsF(5, 5, 5, 5))  # Небольшие поля
+            printer.setPageLayout(page_layout)
+            
+            # Создаем painter для рендеринга
+            painter = QPainter(printer)
+            painter.setRenderHint(QPainter.Antialiasing)
+            
+            # Получаем границы содержимого сцены
+            scene_rect = self.scene.itemsBoundingRect()
+            if scene_rect.isEmpty():
+                QMessageBox.warning(self, "Warning", "No content to print.")
+                painter.end()
+                return
+            
+            # Масштабируем для размещения на странице
+            # Учитываем поля
+            page_rect = printer.pageRect(QPrinter.DevicePixel)
+            
+            # Рассчитываем масштаб для fit-in-page
+            scale_x = page_rect.width() / scene_rect.width()
+            scale_y = page_rect.height() / scene_rect.height()
+            scale = min(scale_x, scale_y) * 0.95  # 95% для запасa
+            
+            painter.scale(scale, scale)
+            
+            # Центрируем содержимое на странице
+            translate_x = -scene_rect.left() + (page_rect.width() / scale - scene_rect.width()) / 2
+            translate_y = -scene_rect.top() + (page_rect.height() / scale - scene_rect.height()) / 2
+            painter.translate(translate_x, translate_y)
+            
+            # Рендерим сцену
+            self.scene.render(painter)
+            
+            painter.end()
+            
+            QMessageBox.information(self, "Success", f"PDF exported to:\n{fname}")
+            self.status_label.setText(f"Exported to PDF: {fname}")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to export PDF:\n{str(e)}")
+            traceback.print_exc()
 
 def main():
     app = QApplication(sys.argv)

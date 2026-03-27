@@ -61,7 +61,7 @@ run_editor.bat
 
 Or directly with Python:
 ```bash
-python drawing_editor.py
+python drawing_editor/main.py
 ```
 
 ### Basic Workflow
@@ -83,10 +83,29 @@ python drawing_editor.py
 
 ```
 /workspace/
-├── drawing_editor.py       # Main application code (1842 lines)
-├── run_editor.bat          # Windows batch launcher
-├── README.md               # This file
-├── IMPROVEMENTS.md         # Detailed improvement suggestions
+├── drawing_editor/           # Refactored package (modular architecture)
+│   ├── __init__.py
+│   ├── main.py               # Application entry point
+│   ├── core/
+│   │   ├── __init__.py
+│   │   └── models.py         # Data models (GraphicObject, LineObject, etc.)
+│   ├── ui/
+│   │   ├── __init__.py
+│   │   ├── main_window.py    # Main application window (CadWindow)
+│   │   ├── cad_view.py       # Custom QGraphicsView (CadView)
+│   │   ├── graphics_items.py # PyQt5 graphics items
+│   │   └── dialogs.py        # Property and input dialogs
+│   ├── managers/
+│   │   ├── __init__.py
+│   │   └── snap_manager.py   # Object snapping manager
+│   └── utils/
+│       ├── __init__.py
+│       └── math_utils.py     # Mathematical utility functions
+├── drawing_editor.py         # Legacy monolithic file (for reference)
+├── cad_editor.py             # Alternative editor version
+├── run_editor.bat            # Windows batch launcher
+├── README.md                 # This file
+├── IMPROVEMENTS.md           # Detailed improvement suggestions
 └── tests/
     ├── __init__.py
     └── test_drawing_editor.py  # Unit tests (40 tests)
@@ -94,29 +113,37 @@ python drawing_editor.py
 
 ## Code Architecture
 
-The application follows an MVC-like architecture:
+The application follows an MVC-like architecture with a modular package structure:
 
-### Data Models (`drawing_editor.py`)
+### Data Models (`drawing_editor/core/models.py`)
 - `GraphicObject`: Base class for all graphic objects
 - `PointObject`, `LineObject`, `CircleObject`, etc.: Specific shape models
 - `DimensionObject`: Dimension annotation model
+- Properties like `length`, `area`, `midpoint` for geometric calculations
 
-### Graphics Items (PyQt5 Visual Layer)
+### Graphics Items (`drawing_editor/ui/graphics_items.py`)
 - `GraphicsPoint`, `GraphicsLine`, `GraphicsCircle`, etc.: Qt graphics items
 - `GraphicsDimension`: Complex dimension rendering
 - All items support selection, movement, and style updates
+- `update_from_obj()` methods for synchronizing with data models
 
-### Managers
-- `SnapManager`: Handles object snapping logic
-- `CadView`: Custom QGraphicsView with drawing tools
+### Managers (`drawing_editor/managers/`)
+- `SnapManager`: Handles object snapping logic (endpoints, centers, midpoints)
+- Configurable snap tolerance and snap types
 
-### Main Window
-- `CadWindow`: Main application window with:
-  - Toolbar with drawing/editing tools
-  - Graphics view canvas
-  - Object list panel
-  - Properties editor
-  - Snap settings panel
+### UI Components (`drawing_editor/ui/`)
+- `CadView`: Custom QGraphicsView with drawing tools and mouse interaction
+- `CadWindow`: Main application window with toolbar, docks, and menus
+- `PropertyDialog`: Dialog for editing object properties
+- `dialogs`: Additional input dialogs for arc, text, and dimension parameters
+
+### Utilities (`drawing_editor/utils/math_utils.py`)
+- Geometric calculation functions (distance, angle, rotation, midpoint)
+- Vector operations (normalization)
+- Point-on-line detection
+
+### Entry Point (`drawing_editor/main.py`)
+- Application bootstrap and PyQt5 event loop
 
 ## Supported DXF Entities
 

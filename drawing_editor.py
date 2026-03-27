@@ -26,8 +26,8 @@ PAPER_SIZES = {
 }
 
 # Default colors
-DEFAULT_BACKGROUND_COLOR = QColor(0, 0, 0)  # Black
-DEFAULT_OBJECT_COLOR = QColor(255, 255, 255)  # White
+DEFAULT_BACKGROUND_COLOR = QColor(255, 255, 255)  # White
+DEFAULT_OBJECT_COLOR = QColor(0, 0, 0)  # Black
 
 # ------------------ Модель данных ------------------
 class GraphicObject:

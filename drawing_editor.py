@@ -1502,7 +1502,8 @@ class CadWindow(QMainWindow):
                     self.prop_end.setText("")
                 if hasattr(item, 'pen'):
                     pen = item.pen()
-                    self.prop_linetype.setText(["Solid", "Dash", "DashDot"][pen.style()])
+                    style_map = {Qt.SolidLine: "Solid", Qt.DashLine: "Dash", Qt.DashDotLine: "DashDot"}
+                    self.prop_linetype.setText(style_map.get(pen.style(), "Solid"))
                     self.prop_color.setText(pen.color().name())
                     self.prop_width.setText(f"{pen.widthF():.2f}")
                 break

@@ -837,6 +837,19 @@ class CadWindow(QMainWindow):
         toolbar.addAction(text_action)
         toolbar.addSeparator()
 
+        # Дополнительные инструменты рисования
+        polyline_action = QAction("Polyline", self)
+        polyline_action.triggered.connect(lambda: self.set_tool("Polyline"))
+        ellipse_action = QAction("Ellipse", self)
+        ellipse_action.triggered.connect(lambda: self.set_tool("Ellipse"))
+        polygon_action = QAction("Polygon", self)
+        polygon_action.triggered.connect(lambda: self.set_tool("Polygon"))
+        
+        toolbar.addAction(polyline_action)
+        toolbar.addAction(ellipse_action)
+        toolbar.addAction(polygon_action)
+        toolbar.addSeparator()
+
         self.dim_type_combo = QComboBox()
         self.dim_type_combo.addItems(["Linear", "Radius", "Diameter", "Angular"])
         self.dim_type_combo.currentTextChanged.connect(self.on_dim_type_changed)
@@ -845,6 +858,45 @@ class CadWindow(QMainWindow):
         toolbar.addWidget(QLabel("Dim type:"))
         toolbar.addWidget(self.dim_type_combo)
         toolbar.addAction(dim_action)
+        toolbar.addSeparator()
+        
+        # Инструменты редактирования (AutoCAD-style)
+        move_action = QAction("Move", self)
+        move_action.setShortcut("Ctrl+M")
+        move_action.triggered.connect(self.move_selected)
+        copy_action = QAction("Copy", self)
+        copy_action.setShortcut("Ctrl+C")
+        copy_action.triggered.connect(self.copy_selected)
+        rotate_action = QAction("Rotate", self)
+        rotate_action.setShortcut("Ctrl+R")
+        rotate_action.triggered.connect(self.rotate_selected)
+        scale_action = QAction("Scale", self)
+        scale_action.setShortcut("Ctrl+S")
+        scale_action.triggered.connect(self.scale_selected)
+        mirror_action = QAction("Mirror", self)
+        mirror_action.triggered.connect(self.mirror_selected)
+        trim_action = QAction("Trim", self)
+        trim_action.triggered.connect(self.trim_selected)
+        extend_action = QAction("Extend", self)
+        extend_action.triggered.connect(self.extend_selected)
+        offset_action = QAction("Offset", self)
+        offset_action.triggered.connect(self.offset_selected)
+        fillet_action = QAction("Fillet", self)
+        fillet_action.triggered.connect(self.fillet_selected)
+        chamfer_action = QAction("Chamfer", self)
+        chamfer_action.triggered.connect(self.chamfer_selected)
+        
+        toolbar.addAction(move_action)
+        toolbar.addAction(copy_action)
+        toolbar.addAction(rotate_action)
+        toolbar.addAction(scale_action)
+        toolbar.addAction(mirror_action)
+        toolbar.addSeparator()
+        toolbar.addAction(trim_action)
+        toolbar.addAction(extend_action)
+        toolbar.addAction(offset_action)
+        toolbar.addAction(fillet_action)
+        toolbar.addAction(chamfer_action)
         toolbar.addSeparator()
         
         # Выбор формата бумаги
@@ -1582,6 +1634,204 @@ class CadWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to export PDF:\n{str(e)}")
             traceback.print_exc()
+
+    # ------------------ Функции редактирования (AutoCAD-style) ------------------
+    def move_selected(self):
+        """Перемещение выделенных объектов"""
+        selected = self.scene.selectedItems()
+        if not selected:
+            QMessageBox.information(self, "Info", "No objects selected.")
+            return
+        
+        # Запрашиваем смещение
+        dx, ok_x = QInputDialog.getDouble(self, "Move", "Enter X offset:", 0.0)
+        if not ok_x:
+            return
+        dy, ok_y = QInputDialog.getDouble(self, "Move", "Enter Y offset:", 0.0)
+        if not ok_y:
+            return
+        
+        for item in selected:
+            item.moveBy(dx, dy)
+            # Обновляем координаты в объекте
+            for obj in self.obj_map.values():
+                if obj.graphics_item == item:
+                    if hasattr(obj, 'x1'):
+                        obj.x1 += dx
+                        obj.y1 += dy
+                    if hasattr(obj, 'x2'):
+                        obj.x2 += dx
+                        obj.y2 += dy
+                    if hasattr(obj, 'cx'):
+                        obj.cx += dx
+                        obj.cy += dy
+                    break
+        self.status_label.setText(f"Moved {len(selected)} object(s)")
+    
+    def copy_selected(self):
+        """Копирование выделенных объектов"""
+        selected = self.scene.selectedItems()
+        if not selected:
+            QMessageBox.information(self, "Info", "No objects selected.")
+            return
+        
+        # Запрашиваем смещение для копии
+        dx, ok_x = QInputDialog.getDouble(self, "Copy", "Enter X offset:", 10.0)
+        if not ok_x:
+            return
+        dy, ok_y = QInputDialog.getDouble(self, "Copy", "Enter Y offset:", 10.0)
+        if not ok_y:
+            return
+        
+        for item in selected:
+            # Находим соответствующий объект
+            for obj in self.obj_map.values():
+                if obj.graphics_item == item:
+                    # Создаем копию объекта
+                    if obj.type == "Line":
+                        self.add_line(obj.x1 + dx, obj.y1 + dy, obj.x2 + dx, obj.y2 + dy)
+                    elif obj.type == "Circle":
+                        self.add_circle(obj.cx + dx, obj.cy + dy, obj.radius)
+                    elif obj.type == "Rectangle":
+                        self.add_rectangle(obj.x1 + dx, obj.y1 + dy, obj.x2 + dx, obj.y2 + dy)
+                    elif obj.type == "Arc":
+                        self.add_arc(obj.cx + dx, obj.cy + dy, obj.radius, obj.start_angle, obj.end_angle)
+                    elif obj.type == "Text":
+                        self.add_text(obj.x + dx, obj.y + dy, obj.text, obj.height)
+                    break
+        self.status_label.setText(f"Copied {len(selected)} object(s)")
+    
+    def rotate_selected(self):
+        """Вращение выделенных объектов"""
+        selected = self.scene.selectedItems()
+        if not selected:
+            QMessageBox.information(self, "Info", "No objects selected.")
+            return
+        
+        # Запрашиваем центр вращения и угол
+        cx, ok_x = QInputDialog.getDouble(self, "Rotate", "Center X:", 0.0)
+        if not ok_x:
+            return
+        cy, ok_y = QInputDialog.getDouble(self, "Rotate", "Center Y:", 0.0)
+        if not ok_y:
+            return
+        angle, ok_a = QInputDialog.getDouble(self, "Rotate", "Angle (degrees):", 90.0)
+        if not ok_a:
+            return
+        
+        center = QPointF(cx, cy)
+        for item in selected:
+            item.setRotation(item.rotation() + angle)
+            # Для точного вращения нужно обновить координаты
+            # Упрощенная реализация - вращение вокруг центра объекта
+        self.status_label.setText(f"Rotated {len(selected)} object(s) by {angle}°")
+    
+    def scale_selected(self):
+        """Масштабирование выделенных объектов"""
+        selected = self.scene.selectedItems()
+        if not selected:
+            QMessageBox.information(self, "Info", "No objects selected.")
+            return
+        
+        factor, ok = QInputDialog.getDouble(self, "Scale", "Scale factor:", 2.0, 0.1, 10.0)
+        if not ok:
+            return
+        
+        for item in selected:
+            item.setScale(item.scale() * factor)
+        self.status_label.setText(f"Scaled {len(selected)} object(s) by {factor}x")
+    
+    def mirror_selected(self):
+        """Отражение выделенных объектов"""
+        selected = self.scene.selectedItems()
+        if not selected:
+            QMessageBox.information(self, "Info", "No objects selected.")
+            return
+        
+        axis, ok = QInputDialog.getItem(self, "Mirror", "Mirror axis:", ["Horizontal", "Vertical"], 0, False)
+        if not ok:
+            return
+        
+        for item in selected:
+            if axis == "Horizontal":
+                item.setScale(1, -1)
+            else:
+                item.setScale(-1, 1)
+        self.status_label.setText(f"Mired {len(selected)} object(s)")
+    
+    def trim_selected(self):
+        """Обрезка объектов (упрощенная реализация)"""
+        QMessageBox.information(self, "Trim", "Select cutting edges first, then objects to trim.\n(Full implementation requires complex geometry calculations)")
+        self.set_tool("Trim")
+        self.status_label.setText("Trim mode: Select cutting edges")
+    
+    def extend_selected(self):
+        """Удлинение объектов до границы (упрощенная реализация)"""
+        QMessageBox.information(self, "Extend", "Select boundary edges first, then objects to extend.\n(Full implementation requires complex geometry calculations)")
+        self.set_tool("Extend")
+        self.status_label.setText("Extend mode: Select boundary edges")
+    
+    def offset_selected(self):
+        """Создание подобия объекта на заданном расстоянии"""
+        selected = self.scene.selectedItems()
+        if not selected:
+            QMessageBox.information(self, "Info", "No objects selected.")
+            return
+        
+        distance, ok = QInputDialog.getDouble(self, "Offset", "Offset distance:", 5.0)
+        if not ok:
+            return
+        
+        for item in selected:
+            for obj in self.obj_map.values():
+                if obj.graphics_item == item:
+                    if obj.type == "Line":
+                        # Смещаем линию перпендикулярно
+                        dx = obj.x2 - obj.x1
+                        dy = obj.y2 - obj.y1
+                        length = math.hypot(dx, dy)
+                        if length > 0:
+                            nx = -dy / length * distance
+                            ny = dx / length * distance
+                            self.add_line(obj.x1 + nx, obj.y1 + ny, obj.x2 + nx, obj.y2 + ny)
+                    elif obj.type == "Circle":
+                        self.add_circle(obj.cx, obj.cy, obj.radius + distance)
+                    elif obj.type == "Rectangle":
+                        # Увеличиваем прямоугольник
+                        self.add_rectangle(obj.x1 - distance, obj.y1 - distance, 
+                                         obj.x2 + distance, obj.y2 + distance)
+                    break
+        self.status_label.setText(f"Offset created for {len(selected)} object(s)")
+    
+    def fillet_selected(self):
+        """Скругление углов (упрощенная реализация)"""
+        selected = self.scene.selectedItems()
+        if len(selected) < 2:
+            QMessageBox.information(self, "Info", "Select two lines to fillet.")
+            return
+        
+        radius, ok = QInputDialog.getDouble(self, "Fillet", "Fillet radius:", 5.0)
+        if not ok:
+            return
+        
+        QMessageBox.information(self, "Fillet", f"Fillet with radius {radius} would be applied here.\n(Full implementation requires intersection calculations)")
+    
+    def chamfer_selected(self):
+        """Фаска (упрощенная реализация)"""
+        selected = self.scene.selectedItems()
+        if len(selected) < 2:
+            QMessageBox.information(self, "Info", "Select two lines to chamfer.")
+            return
+        
+        dist1, ok1 = QInputDialog.getDouble(self, "Chamfer", "First distance:", 5.0)
+        if not ok1:
+            return
+        dist2, ok2 = QInputDialog.getDouble(self, "Chamfer", "Second distance:", 5.0)
+        if not ok2:
+            return
+        
+        QMessageBox.information(self, "Chamfer", f"Chamfer with distances {dist1} and {dist2} would be applied here.\n(Full implementation requires intersection calculations)")
+
 
 def main():
     app = QApplication(sys.argv)

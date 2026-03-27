@@ -1605,7 +1605,9 @@ class CadWindow(QMainWindow):
             return
         try:
             new_doc = ezdxf.new(version)
-            new_doc.modelspace().add_entities(list(self.dxf_modelspace))
+            new_msp = new_doc.modelspace()
+            for entity in self.dxf_modelspace:
+                new_msp.add_entity(entity.copy())
             new_doc.saveas(fname)
             self.current_file = fname
             self.dxf_doc = new_doc

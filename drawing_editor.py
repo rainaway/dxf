@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QGraphicsView, QGraphics
                              QMenu, QGraphicsSimpleTextItem, QCheckBox, QGroupBox, QHBoxLayout)
 from PyQt5.QtCore import Qt, QRectF, QPointF, QLineF
 from PyQt5.QtGui import QPen, QBrush, QColor, QFont, QPainterPath, QPolygonF, QPainter, QTransform
-from PyQt5.QtPrintSupport import QPrinter, QPrintDialog, QPageLayout
+from PyQt5.QtPrintSupport import QPrinter, QPrintDialog
 import ezdxf
 from ezdxf.math import Vec3
 

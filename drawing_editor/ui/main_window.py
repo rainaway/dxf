@@ -31,7 +31,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QRectF, QPointF, QLineF
 from PyQt5.QtGui import QPen, QBrush, QColor, QFont, QPainter, QTransform
-from PyQt5.QtPrintSupport import QPrinter, QPageLayout
+from PyQt5.QtPrintSupport import QPrinter
 import ezdxf
 from ezdxf.math import Vec3
 
@@ -821,3 +821,4 @@ def main():
     sys.exit(app.exec_())
 
 if __name__ == "__main__":
+    main()

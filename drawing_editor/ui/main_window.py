@@ -407,6 +407,9 @@ class CadWindow(QMainWindow):
             self.scene.removeItem(item)
         self.update_list()
         self.update_selected_properties()
+        # Invalidate snap cache after deletion
+        if self.view.snap_manager:
+            self.view.snap_manager.invalidate_cache()
 
     def remove_line_width(self):
         """Убрать толщину линии у выделенных объектов."""
@@ -1093,6 +1096,9 @@ class CadWindow(QMainWindow):
         obj.graphics_item = item
         self.obj_map[entity] = obj
         self.list_widget.addItem(f"Line ({x1:.2f},{y1:.2f})-({x2:.2f},{y2:.2f})")
+        # Invalidate snap cache for performance
+        if self.view.snap_manager:
+            self.view.snap_manager.invalidate_cache()
         # Auto-fit view to show all content
         if self.scene.items():
             self.view.fitInView(self.scene.itemsBoundingRect(), Qt.KeepAspectRatio)
@@ -1135,6 +1141,9 @@ class CadWindow(QMainWindow):
         obj.graphics_item = item
         self.obj_map[entity] = obj
         self.list_widget.addItem(f"Circle (r={r:.2f})")
+        # Invalidate snap cache for performance
+        if self.view.snap_manager:
+            self.view.snap_manager.invalidate_cache()
         # Auto-fit view to show all content
         if self.scene.items():
             self.view.fitInView(self.scene.itemsBoundingRect(), Qt.KeepAspectRatio)
@@ -1178,6 +1187,9 @@ class CadWindow(QMainWindow):
         obj.graphics_item = item
         self.obj_map[entity] = obj
         self.list_widget.addItem(f"Rectangle")
+        # Invalidate snap cache for performance
+        if self.view.snap_manager:
+            self.view.snap_manager.invalidate_cache()
         return item
 
     def add_arc(self, cx, cy, r, start_angle, end_angle):
@@ -1217,6 +1229,9 @@ class CadWindow(QMainWindow):
         obj.graphics_item = item
         self.obj_map[entity] = obj
         self.list_widget.addItem(f"Arc")
+        # Invalidate snap cache for performance
+        if self.view.snap_manager:
+            self.view.snap_manager.invalidate_cache()
         return item
 
     def add_text(self, x, y, text, height=2.5):
@@ -1241,6 +1256,9 @@ class CadWindow(QMainWindow):
         obj.graphics_item = item
         self.obj_map[entity] = obj
         self.list_widget.addItem(f"Text: {text[:20]}")
+        # Invalidate snap cache for performance (text points can be snapped to)
+        if self.view.snap_manager:
+            self.view.snap_manager.invalidate_cache()
         return item
 
     def add_dimension(self, p1, p2, dim_type="Linear", offset=2):
@@ -1249,6 +1267,9 @@ class CadWindow(QMainWindow):
         self.scene.addItem(item)
         obj.graphics_item = item
         self.list_widget.addItem(f"Dimension ({dim_type})")
+        # Invalidate snap cache for performance
+        if self.view.snap_manager:
+            self.view.snap_manager.invalidate_cache()
         return item
 
     def add_radius_dim(self, center, radius):
@@ -1258,6 +1279,9 @@ class CadWindow(QMainWindow):
         self.scene.addItem(item)
         obj.graphics_item = item
         self.list_widget.addItem(f"Radius Dimension R{radius:.2f}")
+        # Invalidate snap cache for performance
+        if self.view.snap_manager:
+            self.view.snap_manager.invalidate_cache()
         return item
 
     def add_diameter_dim(self, center, diameter):
@@ -1267,6 +1291,9 @@ class CadWindow(QMainWindow):
         self.scene.addItem(item)
         obj.graphics_item = item
         self.list_widget.addItem(f"Diameter Dimension Ø{diameter:.2f}")
+        # Invalidate snap cache for performance
+        if self.view.snap_manager:
+            self.view.snap_manager.invalidate_cache()
         return item
 
     def add_angular_dim(self, vertex, angle):
@@ -1276,6 +1303,9 @@ class CadWindow(QMainWindow):
         self.scene.addItem(item)
         obj.graphics_item = item
         self.list_widget.addItem(f"Angular Dimension {angle:.1f}°")
+        # Invalidate snap cache for performance
+        if self.view.snap_manager:
+            self.view.snap_manager.invalidate_cache()
         return item
 
 def main():

@@ -118,6 +118,7 @@ class CadView(QGraphicsView):
             self.snap_manager = SnapManager(scene)
         else:
             self.snap_manager.scene = scene
+            self.snap_manager.invalidate_cache()
 
     def set_tool(self, tool: str) -> None:
         """Switch to a different drawing tool."""

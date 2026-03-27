@@ -86,24 +86,30 @@ class CadView(QGraphicsView):
 
     def keyPressEvent(self, event: Any) -> None:
         """Handle keyboard shortcuts."""
-        if event.key() == Qt.Key_Escape:
-            if self.parent_window:
-                self.parent_window.set_tool("Select")
-            if self.temp_item:
-                self.scene().removeItem(self.temp_item)
-                self.temp_item = None
-            self.start_point = None
-        elif event.key() == Qt.Key_Delete:
-            if self.parent_window:
-                self.parent_window.delete_selected()
-        elif event.key() in (Qt.Key_L, Qt.Key_l):
-            if self.parent_window:
-                self.parent_window.set_tool("Line")
-        elif event.key() in (Qt.Key_C, Qt.Key_c):
-            if self.parent_window:
-                self.parent_window.set_tool("Circle")
-        else:
-            super().keyPressEvent(event)
+        try:
+            if event.key() == Qt.Key_Escape:
+                if self.parent_window:
+                    self.parent_window.set_tool("Select")
+                if self.temp_item:
+                    self.scene().removeItem(self.temp_item)
+                    self.temp_item = None
+                self.start_point = None
+            elif event.key() == Qt.Key_Delete:
+                if self.parent_window:
+                    self.parent_window.delete_selected()
+            elif event.key() in (Qt.Key_L, Qt.Key_l):
+                if self.parent_window:
+                    self.parent_window.set_tool("Line")
+            elif event.key() in (Qt.Key_C, Qt.Key_c):
+                if self.parent_window:
+                    self.parent_window.set_tool("Circle")
+            else:
+                # Ignore unsupported key combinations to prevent crashes
+                event.ignore()
+                return
+        except Exception:
+            # Silently handle any unexpected errors to prevent application crash
+            pass
 
     def setScene(self, scene: QGraphicsScene) -> None:
         """Set the scene and initialize snap manager."""

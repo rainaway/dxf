@@ -691,14 +691,15 @@ class CadView(QGraphicsView):
                 self.tooltip_item = QGraphicsSimpleTextItem()
                 self.tooltip_item.setBrush(QBrush(QColor(0,0,0)))
                 self.tooltip_item.setFont(QFont("Arial", 8))
+                self.tooltip_item.setZValue(10000)
                 self.scene().addItem(self.tooltip_item)
             self.tooltip_item.setText(self.tool)
             scene_pos = self.mapToScene(event.pos())
-            self.tooltip_item.setPos(scene_pos.x() + 5, scene_pos.y() - 10)
+            self.tooltip_item.setPos(scene_pos.x() + 10, scene_pos.y() - 20)
+            self.tooltip_item.show()
         else:
             if self.tooltip_item:
-                self.scene().removeItem(self.tooltip_item)
-                self.tooltip_item = None
+                self.tooltip_item.hide()
 
         # Подсветка объектов в режиме выбора
         if self.tool == "Select":
@@ -718,11 +719,12 @@ class CadView(QGraphicsView):
             if point and hint:
                 if self.hint_item is None:
                     self.hint_item = QGraphicsSimpleTextItem()
-                    self.hint_item.setBrush(QBrush(QColor(0,0,0)))
-                    self.hint_item.setFont(QFont("Arial", 8))
+                    self.hint_item.setBrush(QBrush(QColor(255,0,0)))
+                    self.hint_item.setFont(QFont("Arial", 8, QFont.Bold))
+                    self.hint_item.setZValue(10001)
                     self.scene().addItem(self.hint_item)
                 self.hint_item.setText(hint)
-                self.hint_item.setPos(point.x() + 5, point.y() - 10)
+                self.hint_item.setPos(point.x() + 10, point.y() - 20)
                 self.hint_item.show()
             else:
                 if self.hint_item:
@@ -1021,6 +1023,8 @@ class CadWindow(QMainWindow):
         save_as_action.triggered.connect(self.save_as_file)
         export_pdf_action = QAction("Export PDF", self)
         export_pdf_action.triggered.connect(self.export_pdf)
+        export_html_action = QAction("Export HTML", self)
+        export_html_action.triggered.connect(self.export_html)
         
         file_menu.addAction(new_action)
         file_menu.addAction(open_action)
@@ -1028,6 +1032,7 @@ class CadWindow(QMainWindow):
         file_menu.addAction(save_as_action)
         file_menu.addSeparator()
         file_menu.addAction(export_pdf_action)
+        file_menu.addAction(export_html_action)
         
         # View menu
         view_menu = menubar.addMenu("View")
@@ -1047,6 +1052,7 @@ class CadWindow(QMainWindow):
         toolbar.addAction(save_action)
         toolbar.addAction(save_as_action)
         toolbar.addAction(export_pdf_action)
+        toolbar.addAction(export_html_action)
         toolbar.addSeparator()
 
         select_action = QAction("Select", self)
@@ -1645,6 +1651,229 @@ class CadWindow(QMainWindow):
         painter.end()
 
         QMessageBox.information(self, "Exported", f"PDF saved to {fname}")
+
+    def export_html(self):
+        """Export current scene to HTML file that works offline on any device."""
+        # Get all items except paper border
+        drawing_items = [item for item in self.scene.items() 
+                        if not (isinstance(item, QGraphicsRectItem) and hasattr(item, '_is_paper_border'))]
+        
+        if not drawing_items:
+            QMessageBox.warning(self, "Warning", "Nothing to export.")
+            return
+        
+        fname, _ = QFileDialog.getSaveFileName(self, "Export HTML", "", "HTML Files (*.html)")
+        if not fname:
+            return
+        
+        # Get paper size for bounds display
+        width_mm, height_mm = PAPER_SIZES.get(self.current_paper, PAPER_SIZES["A4"])
+        if self.paper_landscape:
+            width_mm, height_mm = height_mm, width_mm
+        
+        # Generate SVG paths for all drawing items
+        svg_elements = []
+        for item in drawing_items:
+            svg = self._item_to_svg(item)
+            if svg:
+                svg_elements.append(svg)
+        
+        svg_content = "\n".join(svg_elements)
+        
+        html_content = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Drawing Export</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{ 
+            background-color: white; 
+            font-family: Arial, sans-serif;
+            overflow: auto;
+        }}
+        .container {{
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }}
+        .drawing-container {{
+            position: relative;
+            border: 2px dashed red;
+            background-color: white;
+        }}
+        svg {{
+            display: block;
+            max-width: 100%;
+            height: auto;
+        }}
+        .info {{
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 12px;
+        }}
+    </style>
+</head>
+<body>
+    <div class="info">
+        Paper: {self.current_paper} ({width_mm}x{height_mm} mm)<br>
+        Items: {len(drawing_items)}
+    </div>
+    <div class="container">
+        <div class="drawing-container" style="width: {width_mm}px; height: {height_mm}px;">
+            <svg viewBox="-{width_mm/2} -{height_mm/2} {width_mm} {height_mm}" 
+                 width="{width_mm}" height="{height_mm}"
+                 xmlns="http://www.w3.org/2000/svg">
+                {svg_content}
+            </svg>
+        </div>
+    </div>
+</body>
+</html>'''
+        
+        try:
+            with open(fname, 'w', encoding='utf-8') as f:
+                f.write(html_content)
+            QMessageBox.information(self, "Exported", f"HTML saved to {fname}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Export failed:\n{str(e)}")
+    
+    def _item_to_svg(self, item):
+        """Convert a QGraphicsItem to SVG element."""
+        if isinstance(item, GraphicsLine):
+            line = item.line()
+            pen = item.pen()
+            color = pen.color().name()
+            width = max(0.1, pen.widthF())
+            return f'<line x1="{line.x1()}" y1="{line.y1()}" x2="{line.x2()}" y2="{line.y2()}" stroke="{color}" stroke-width="{width}" fill="none"/>'
+        
+        elif isinstance(item, GraphicsCircle):
+            rect = item.rect()
+            cx = rect.center().x()
+            cy = rect.center().y()
+            r = rect.width() / 2
+            pen = item.pen()
+            color = pen.color().name()
+            width = max(0.1, pen.widthF())
+            return f'<circle cx="{cx}" cy="{cy}" r="{r}" stroke="{color}" stroke-width="{width}" fill="none"/>'
+        
+        elif isinstance(item, GraphicsRect):
+            rect = item.rect()
+            pen = item.pen()
+            color = pen.color().name()
+            width = max(0.1, pen.widthF())
+            return f'<rect x="{rect.x()}" y="{rect.y()}" width="{rect.width()}" height="{rect.height()}" stroke="{color}" stroke-width="{width}" fill="none"/>'
+        
+        elif isinstance(item, GraphicsArc):
+            path = item.path()
+            if path.isEmpty():
+                return ''
+            # Convert QPainterPath to SVG path
+            svg_path = self._path_to_svg(path)
+            pen = item.pen()
+            color = pen.color().name()
+            width = max(0.1, pen.widthF())
+            return f'<path d="{svg_path}" stroke="{color}" stroke-width="{width}" fill="none"/>'
+        
+        elif isinstance(item, GraphicsText):
+            text = item.toPlainText()
+            pos = item.pos()
+            font = item.font()
+            # Escape special XML characters
+            text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            return f'<text x="{pos.x()}" y="{pos.y()}" font-family="Arial" font-size="{font.pointSizeF() * 1.5}" fill="black">{text}</text>'
+        
+        elif isinstance(item, GraphicsDimension):
+            # Render dimension as group of elements
+            elements = []
+            for child in item.childItems():
+                child_svg = self._item_to_svg(child)
+                if child_svg:
+                    elements.append(child_svg)
+            return '\n'.join(elements)
+        
+        elif isinstance(item, (QGraphicsLineItem)):
+            line = item.line()
+            pen = item.pen()
+            color = pen.color().name()
+            width = max(0.1, pen.widthF())
+            return f'<line x1="{line.x1()}" y1="{line.y1()}" x2="{line.x2()}" y2="{line.y2()}" stroke="{color}" stroke-width="{width}" fill="none"/>'
+        
+        elif isinstance(item, (QGraphicsEllipseItem)):
+            rect = item.rect()
+            cx = rect.center().x()
+            cy = rect.center().y()
+            rx = rect.width() / 2
+            ry = rect.height() / 2
+            pen = item.pen()
+            color = pen.color().name()
+            width = max(0.1, pen.widthF())
+            if abs(rx - ry) < 0.01:  # Circle
+                return f'<circle cx="{cx}" cy="{cy}" r="{rx}" stroke="{color}" stroke-width="{width}" fill="none"/>'
+            else:  # Ellipse
+                return f'<ellipse cx="{cx}" cy="{cy}" rx="{rx}" ry="{ry}" stroke="{color}" stroke-width="{width}" fill="none"/>'
+        
+        elif isinstance(item, (QGraphicsRectItem)):
+            rect = item.rect()
+            pen = item.pen()
+            color = pen.color().name()
+            width = max(0.1, pen.widthF())
+            return f'<rect x="{rect.x()}" y="{rect.y()}" width="{rect.width()}" height="{rect.height()}" stroke="{color}" stroke-width="{width}" fill="none"/>'
+        
+        elif isinstance(item, (QGraphicsTextItem)):
+            text = item.toPlainText()
+            pos = item.pos()
+            font = item.font()
+            text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            return f'<text x="{pos.x()}" y="{pos.y()}" font-family="Arial" font-size="{font.pointSizeF() * 1.5}" fill="black">{text}</text>'
+        
+        elif isinstance(item, (QGraphicsPathItem)):
+            path = item.path()
+            if path.isEmpty():
+                return ''
+            svg_path = self._path_to_svg(path)
+            pen = item.pen()
+            color = pen.color().name()
+            width = max(0.1, pen.widthF())
+            return f'<path d="{svg_path}" stroke="{color}" stroke-width="{width}" fill="none"/>'
+        
+        return ''
+    
+    def _path_to_svg(self, path):
+        """Convert QPainterPath to SVG path data."""
+        if path.isEmpty():
+            return ''
+        
+        elements = []
+        i = 0
+        while i < path.elementCount():
+            elem = path.elementAt(i)
+            if elem.type == QPainterPath.MoveToElement:
+                elements.append(f'M {elem.x} {elem.y}')
+            elif elem.type == QPainterPath.LineToElement:
+                elements.append(f'L {elem.x} {elem.y}')
+            elif elem.type == QPainterPath.CurveToElement:
+                cp1x, cp1y = elem.x, elem.y
+                i += 1
+                if i < path.elementCount():
+                    elem2 = path.elementAt(i)
+                    cp2x, cp2y = elem2.x, elem2.y
+                    i += 1
+                    if i < path.elementCount():
+                        elem3 = path.elementAt(i)
+                        ex, ey = elem3.x, elem3.y
+                        elements.append(f'C {cp1x} {cp1y} {cp2x} {cp2y} {ex} {ey}')
+            i += 1
+        
+        return ' '.join(elements)
 
     def _sync_dxf(self):
         for obj in self.obj_map.values():

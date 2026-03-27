@@ -589,6 +589,7 @@ class CadView(QGraphicsView):
         self.original_pen = None
         self.original_color = None
         self.hint_item = None
+        self.dimension_label = None  # Метка для отображения размеров при создании
         self.setCursor(Qt.ArrowCursor)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
@@ -636,6 +637,9 @@ class CadView(QGraphicsView):
             self.tooltip_item = None
         if self.hint_item:
             self.hint_item.hide()
+        if self.dimension_label:
+            self.scene().removeItem(self.dimension_label)
+            self.dimension_label = None
         if tool == "Select":
             self.setCursor(Qt.ArrowCursor)
         else:
@@ -736,19 +740,24 @@ class CadView(QGraphicsView):
             if self.hint_item:
                 self.hint_item.hide()
 
-        # Временные объекты
+        # Временные объекты и отображение размеров
         if self.start_point and self.temp_item:
             pos = self.mapToScene(event.pos())
             if self.snap_manager:
                 pos = self.snap_manager.snap_point(self, event.pos())
             if self.tool == "Line":
                 self.temp_item.setLine(QLineF(self.start_point, pos))
+                # Отображаем длину линии
+                length = QLineF(self.start_point, pos).length()
+                self._update_dimension_label(f"L: {length:.2f}", pos)
             elif self.tool == "Circle":
                 dx = pos.x() - self.start_point.x()
                 dy = pos.y() - self.start_point.y()
                 r = math.hypot(dx, dy)
                 rect = QRectF(self.start_point.x() - r, self.start_point.y() - r, 2*r, 2*r)
                 self.temp_item.setRect(rect)
+                # Отображаем радиус окружности
+                self._update_dimension_label(f"R: {r:.2f}", pos)
             elif self.tool == "Rect":
                 x1 = self.start_point.x()
                 y1 = self.start_point.y()
@@ -756,6 +765,10 @@ class CadView(QGraphicsView):
                 y2 = pos.y()
                 rect = QRectF(min(x1,x2), min(y1,y2), abs(x2-x1), abs(y2-y1))
                 self.temp_item.setRect(rect)
+                # Отображаем длину и ширину прямоугольника
+                width = abs(x2 - x1)
+                height = abs(y2 - y1)
+                self._update_dimension_label(f"W: {width:.2f}\nH: {height:.2f}", pos)
             elif self.tool in ("Dim", "RadiusDim", "DiameterDim", "AngularDim"):
                 self.temp_item.setLine(QLineF(self.start_point, pos))
         else:
@@ -852,6 +865,20 @@ class CadView(QGraphicsView):
             self.original_pen = None
             self.original_color = None
 
+    def _update_dimension_label(self, text, pos):
+        """Обновляет или создает метку с размерами для отображения рядом с курсором"""
+        if self.dimension_label is None:
+            self.dimension_label = QGraphicsSimpleTextItem()
+            self.dimension_label.setBrush(QBrush(QColor(0, 128, 0)))  # Зеленый цвет
+            self.dimension_label.setFont(QFont("Arial", 9, QFont.Bold))
+            self.dimension_label.setZValue(10002)  # Выше других элементов
+            self.scene().addItem(self.dimension_label)
+        
+        self.dimension_label.setText(text)
+        # Размещаем метку размеров выше и правее курсора, чтобы не перекрывать примитив
+        self.dimension_label.setPos(pos.x() + 15, pos.y() - 35)
+        self.dimension_label.show()
+
     def finish_drawing(self, pos):
         if self.tool == "Line":
             self.parent_window.add_line(self.start_point.x(), self.start_point.y(), pos.x(), pos.y())
@@ -897,9 +924,13 @@ class CadView(QGraphicsView):
             if ok:
                 self.parent_window.add_angular_dim(self.start_point, angle)
 
+        # Очищаем временные элементы и метку размеров
         if self.temp_item:
             self.scene().removeItem(self.temp_item)
             self.temp_item = None
+        if self.dimension_label:
+            self.scene().removeItem(self.dimension_label)
+            self.dimension_label = None
         self.start_point = None
 
 # ------------------ Диалог свойств ------------------

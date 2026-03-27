@@ -479,8 +479,8 @@ class GraphicsDimension(QGraphicsItemGroup):
 class SnapManager:
     """Manages object snapping for precision drawing."""
     
-    def __init__(self, scene: QGraphicsScene):
-        self.scene = scene
+    def __init__(self, view: 'CadView'):
+        self.view = view
         self.enabled = True
         self.snap_endpoint = True
         self.snap_midpoint = True
@@ -489,11 +489,10 @@ class SnapManager:
         self.snap_nearest = False
         self.snap_tolerance = SNAP_TOLERANCE
 
-    def snap_point(self, view: 'CadView', screen_point: QPointF) -> Optional[QPointF]:
+    def snap_point(self, screen_point: QPointF) -> Optional[QPointF]:
         """Find snap point in world coordinates.
         
         Args:
-            view: The CAD view to get coordinate transformations from.
             screen_point: Point in screen coordinates.
             
         Returns:
@@ -502,15 +501,19 @@ class SnapManager:
         if not self.enabled:
             return None
         
+        scene = self.view.scene()
+        if scene is None:
+            return None
+        
         best_dist = float('inf')
         best_point = None
         
-        for item in self.scene.items():
+        for item in scene.items():
             if isinstance(item, (GraphicsPoint, GraphicsLine, GraphicsCircle, 
                                 GraphicsArc, GraphicsRect)):
                 points = self._get_snap_points(item)
                 for p in points:
-                    screen_p = view.mapFromScene(p)
+                    screen_p = self.view.mapFromScene(p)
                     dist = (screen_p.x() - screen_point.x())**2 + \
                            (screen_p.y() - screen_point.y())**2
                     if dist < best_dist and dist < self.snap_tolerance**2:
@@ -558,7 +561,7 @@ class CadView(QGraphicsView):
         self.start_point = None
         self.temp_item = None
         self.parent_window = parent
-        self.snap_manager = SnapManager(self.scene())
+        self.snap_manager = SnapManager(self)
 
     def set_tool(self, tool: str):
         """Set the current drawing tool."""
@@ -575,7 +578,7 @@ class CadView(QGraphicsView):
             return
 
         # Get snapped point if available
-        snapped = self.snap_manager.snap_point(self, event.pos())
+        snapped = self.snap_manager.snap_point(event.pos())
         pos = snapped if snapped is not None else self.mapToScene(event.pos())
 
         if event.button() == Qt.LeftButton:
@@ -618,7 +621,7 @@ class CadView(QGraphicsView):
     def mouseMoveEvent(self, event):
         """Handle mouse move for dynamic drawing preview."""
         if self.tool != "Select" and self.start_point and self.temp_item:
-            snapped = self.snap_manager.snap_point(self, event.pos())
+            snapped = self.snap_manager.snap_point(event.pos())
             pos = snapped if snapped is not None else self.mapToScene(event.pos())
             
             if self.tool in ("Line", "DimLinear", "DimRadius", "DimDiameter", "DimAngular"):

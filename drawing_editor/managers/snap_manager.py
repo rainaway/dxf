@@ -43,6 +43,57 @@ class SnapManager:
         self._cache_valid = False
         self._cached_points.clear()
 
+    def add_item_snap_points(self, item: Any) -> None:
+        """Incrementally add snap points for a new item (optimization)."""
+        if not self.snap_to_endpoints and not self.snap_to_center:
+            return
+            
+        if self.snap_to_endpoints:
+            if isinstance(item, GraphicsLine):
+                line = item.line()
+                self._cached_points.append((line.p1(), "End"))
+                self._cached_points.append((line.p2(), "End"))
+                
+            elif isinstance(item, GraphicsRect):
+                rect = item.rect()
+                self._cached_points.append((rect.topLeft(), "Vertex"))
+                self._cached_points.append((rect.topRight(), "Vertex"))
+                self._cached_points.append((rect.bottomLeft(), "Vertex"))
+                self._cached_points.append((rect.bottomRight(), "Vertex"))
+                
+            elif isinstance(item, GraphicsPoint):
+                self._cached_points.append((item.pos(), "Point"))
+        
+        if self.snap_to_center and isinstance(item, GraphicsCircle):
+            p = QPointF(item.circle_obj.cx, item.circle_obj.cy)
+            self._cached_points.append((p, "Center"))
+
+    def remove_item_snap_points(self, item: Any) -> None:
+        """Incrementally remove snap points for a removed item (optimization)."""
+        if not self._cached_points:
+            return
+        
+        # Filter out points belonging to this item
+        if isinstance(item, GraphicsLine):
+            line = item.line()
+            line_points = {line.p1(), line.p2()}
+            self._cached_points = [(p, h) for p, h in self._cached_points 
+                                   if p not in line_points]
+        elif isinstance(item, GraphicsRect):
+            rect = item.rect()
+            rect_points = {rect.topLeft(), rect.topRight(), 
+                          rect.bottomLeft(), rect.bottomRight()}
+            self._cached_points = [(p, h) for p, h in self._cached_points 
+                                   if p not in rect_points]
+        elif isinstance(item, GraphicsPoint):
+            point_pos = item.pos()
+            self._cached_points = [(p, h) for p, h in self._cached_points 
+                                   if p != point_pos]
+        elif isinstance(item, GraphicsCircle):
+            circle_center = QPointF(item.circle_obj.cx, item.circle_obj.cy)
+            self._cached_points = [(p, h) for p, h in self._cached_points 
+                                   if p != circle_center]
+
     def _build_snap_cache(self) -> None:
         """Pre-compute all snap points for efficient lookup."""
         if not self.scene:
@@ -51,25 +102,7 @@ class SnapManager:
         self._cached_points.clear()
         
         for item in self.scene.items():
-            if self.snap_to_endpoints:
-                if isinstance(item, GraphicsLine):
-                    line = item.line()
-                    self._cached_points.append((line.p1(), "End"))
-                    self._cached_points.append((line.p2(), "End"))
-                    
-                elif isinstance(item, GraphicsRect):
-                    rect = item.rect()
-                    self._cached_points.append((rect.topLeft(), "Vertex"))
-                    self._cached_points.append((rect.topRight(), "Vertex"))
-                    self._cached_points.append((rect.bottomLeft(), "Vertex"))
-                    self._cached_points.append((rect.bottomRight(), "Vertex"))
-                    
-                elif isinstance(item, GraphicsPoint):
-                    self._cached_points.append((item.pos(), "Point"))
-            
-            if self.snap_to_center and isinstance(item, GraphicsCircle):
-                p = QPointF(item.circle_obj.cx, item.circle_obj.cy)
-                self._cached_points.append((p, "Center"))
+            self.add_item_snap_points(item)
         
         self._cache_valid = True
 

@@ -9,13 +9,13 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QGraphicsView, QGraphics
                              QGraphicsTextItem, QGraphicsRectItem, QGraphicsPolygonItem,
                              QGraphicsItemGroup, QInputDialog, QColorDialog, QComboBox,
                              QMenu, QGraphicsSimpleTextItem, QCheckBox, QGroupBox, QHBoxLayout)
-from PyQt5.QtPrintSupport import QPrinter, QPrintDialog
-from PyQt5.QtCore import Qt, QRectF, QPointF, QLineF, QMarginsF, QSizeF
-from PyQt5.QtGui import QPen, QBrush, QColor, QFont, QPainterPath, QPolygonF, QPainter, QTransform, QPageLayout, QPageSize
+from PyQt5.QtCore import Qt, QRectF, QPointF, QLineF
+from PyQt5.QtGui import QPen, QBrush, QColor, QFont, QPainterPath, QPolygonF, QPainter, QTransform
+from PyQt5.QtPrintSupport import QPrinter, QPrintDialog, QPageLayout
 import ezdxf
 from ezdxf.math import Vec3
 
-# ------------------ Модель данных для графических объектов ------------------
+# ------------------ Модель данных ------------------
 class GraphicObject:
     def __init__(self, dxf_entity=None):
         self.dxf_entity = dxf_entity
@@ -80,7 +80,7 @@ class DimensionObject(GraphicObject):
         self.diameter = None
         self.angle = None
 
-# ------------------ Графические элементы PyQt ------------------
+# ------------------ Графические элементы ------------------
 class GraphicsPoint(QGraphicsEllipseItem):
     def __init__(self, point_obj, size=0.2):
         super().__init__(-size/2, -size/2, size, size)
@@ -272,20 +272,20 @@ class GraphicsDimension(QGraphicsItemGroup):
         self.addToGroup(arc)
         self.addToGroup(text)
 
-# ------------------ Привязка ------------------
+# ------------------ Привязка с подсказкой ------------------
 class SnapManager:
     def __init__(self, scene):
         self.scene = scene
-        self.snap_distance = 30
+        self.snap_distance = 40
         self.snap_to_endpoints = True
         self.snap_to_center = True
 
-    def snap_point(self, view, screen_pos):
-        scene_pos = view.mapToScene(screen_pos)
+    def get_snap_info(self, view, screen_pos):
         if not self.scene:
-            return scene_pos
+            return None, None
         best_dist = self.snap_distance
         best_point = None
+        best_hint = None
         for item in self.scene.items():
             if self.snap_to_endpoints:
                 if isinstance(item, GraphicsLine):
@@ -296,6 +296,7 @@ class SnapManager:
                         if dist < best_dist:
                             best_dist = dist
                             best_point = p
+                            best_hint = "End"
                 elif isinstance(item, GraphicsRect):
                     rect = item.rect()
                     for p in [rect.topLeft(), rect.topRight(), rect.bottomLeft(), rect.bottomRight()]:
@@ -304,6 +305,7 @@ class SnapManager:
                         if dist < best_dist:
                             best_dist = dist
                             best_point = p
+                            best_hint = "Vertex"
                 elif isinstance(item, GraphicsPoint):
                     p = item.pos()
                     pixel_pos = view.mapFromScene(p)
@@ -311,6 +313,7 @@ class SnapManager:
                     if dist < best_dist:
                         best_dist = dist
                         best_point = p
+                        best_hint = "Point"
             if self.snap_to_center and isinstance(item, GraphicsCircle):
                 p = QPointF(item.circle_obj.cx, item.circle_obj.cy)
                 pixel_pos = view.mapFromScene(p)
@@ -318,14 +321,19 @@ class SnapManager:
                 if dist < best_dist:
                     best_dist = dist
                     best_point = p
-        return best_point if best_point else scene_pos
+                    best_hint = "Center"
+        return best_point, best_hint
+
+    def snap_point(self, view, screen_pos):
+        point, _ = self.get_snap_info(view, screen_pos)
+        return point if point else view.mapToScene(screen_pos)
 
 # ------------------ Кастомный вид для рисования ------------------
 class CadView(QGraphicsView):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setRenderHint(QPainter.Antialiasing)
-        self.setDragMode(QGraphicsView.NoDrag)  # Отключаем стандартный RubberBandDrag
+        self.setDragMode(QGraphicsView.RubberBandDrag)
         self.tool = "Select"
         self.start_point = None
         self.temp_item = None
@@ -336,55 +344,67 @@ class CadView(QGraphicsView):
         self.hovered_item = None
         self.original_pen = None
         self.original_color = None
+        self.hint_item = None
         self.setCursor(Qt.ArrowCursor)
-        # Масштабирование
-        self._zoom_factor = 1.2
-        self._min_zoom = 0.1
-        self._max_zoom = 10.0
-        # Перемещение области (панорамирование)
-        self._panning = False
-        self._last_pan_pos = None
+        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
     def wheelEvent(self, event):
-        """Масштабирование колесом мыши"""
-        delta = event.angleDelta().y()
-        if delta > 0:
-            factor = self._zoom_factor
-        else:
-            factor = 1 / self._zoom_factor
-        
-        current_zoom = self.transform().m11()
-        new_zoom = current_zoom * factor
-        
-        if self._min_zoom <= new_zoom <= self._max_zoom:
-            # Масштабирование относительно позиции курсора
-            pos = event.pos()
-            before_pos = self.mapToScene(pos)
+        factor = 1.1
+        if event.angleDelta().y() > 0:
             self.scale(factor, factor)
-            after_pos = self.mapToScene(pos)
-            # Корректировка позиции, чтобы точка под курсором осталась на месте
-            self.translate(after_pos.x() - before_pos.x(), after_pos.y() - before_pos.y())
-        event.accept()
+        else:
+            self.scale(1/factor, 1/factor)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.parent_window.set_tool("Select")
+            if self.temp_item:
+                self.scene().removeItem(self.temp_item)
+                self.temp_item = None
+            self.start_point = None
+        elif event.key() == Qt.Key_Delete:
+            self.parent_window.delete_selected()
+        elif event.key() == Qt.Key_L or event.key() == Qt.Key_l:
+            self.parent_window.set_tool("Line")
+        elif event.key() == Qt.Key_C or event.key() == Qt.Key_c:
+            self.parent_window.set_tool("Circle")
+        else:
+            super().keyPressEvent(event)
+
+    def setScene(self, scene):
+        super().setScene(scene)
+        if self.snap_manager is None:
+            self.snap_manager = SnapManager(scene)
+        else:
+            self.snap_manager.scene = scene
+
+    def set_tool(self, tool):
+        self.tool = tool
+        self.start_point = None
+        if self.temp_item:
+            self.scene().removeItem(self.temp_item)
+            self.temp_item = None
+        if self.tooltip_item:
+            self.scene().removeItem(self.tooltip_item)
+            self.tooltip_item = None
+        if self.hint_item:
+            self.hint_item.hide()
+        if tool == "Select":
+            self.setCursor(Qt.ArrowCursor)
+        else:
+            self.setCursor(Qt.CrossCursor)
+
+    def set_dim_type(self, dim_type):
+        self.dim_type = dim_type
 
     def mousePressEvent(self, event):
-        # Обработка нажатия колеса мыши для панорамирования
-        if event.button() == Qt.MiddleButton:
-            self._panning = True
-            self._last_pan_pos = event.pos()
-            self.setCursor(Qt.ClosedHandCursor)
-            event.accept()
-            return
-        
-        # Команда _m (перемещение) - обрабатывается через клавиатуру, но здесь поддержка через флаг
-        if hasattr(self, '_move_mode') and self._move_mode:
-            self._panning = True
-            self._last_pan_pos = event.pos()
-            self.setCursor(Qt.ClosedHandCursor)
-            event.accept()
-            return
-            
         if self.tool == "Select":
             super().mousePressEvent(event)
+            return
+        if self.tool == "Trim":
             return
 
         pos = self.mapToScene(event.pos())
@@ -421,80 +441,24 @@ class CadView(QGraphicsView):
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        # Обработка панорамирования (перемещения области) при зажатом колесе мыши
-        if self._panning and self._last_pan_pos is not None:
-            delta = event.pos() - self._last_pan_pos
-            self._last_pan_pos = event.pos()
-            # Прокрутка сцены в противоположном направлении движения мыши
-            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
-            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
-            return
-        
-        scene_pos = self.mapToScene(event.pos())
-        snapped_pos = scene_pos
-        snap_name = ""
-        
-        # Проверка привязок
-        if self.snap_manager and self.tool != "Select":
-            snapped_pos = self.snap_manager.snap_point(self, event.pos())
-            # Определяем имя привязки
-            if snapped_pos != scene_pos:
-                # Проверяем тип привязки
-                for obj in self.parent_window.obj_map.values():
-                    if obj.type == "Line":
-                        if math.hypot(snapped_pos.x() - obj.x1, snapped_pos.y() - obj.y1) < 0.5:
-                            snap_name = "Endpoint"
-                            break
-                        elif math.hypot(snapped_pos.x() - obj.x2, snapped_pos.y() - obj.y2) < 0.5:
-                            snap_name = "Endpoint"
-                            break
-                    elif obj.type == "Circle":
-                        if math.hypot(snapped_pos.x() - obj.cx, snapped_pos.y() - obj.cy) < 0.5:
-                            snap_name = "Center"
-                            break
-        
-        # Подсказка для инструментов рисования (следует за курсором)
+        # Подсказка инструмента
         if self.tool != "Select":
             if self.tooltip_item is None:
                 self.tooltip_item = QGraphicsSimpleTextItem()
                 self.tooltip_item.setBrush(QBrush(QColor(0,0,0)))
                 self.tooltip_item.setFont(QFont("Arial", 8))
                 self.scene().addItem(self.tooltip_item)
-            
-            # Отображение названия инструмента и координат
-            if snap_name:
-                tooltip_text = f"{self.tool}: ({snapped_pos.x():.2f}, {snapped_pos.y():.2f}) [{snap_name}]"
-            else:
-                tooltip_text = f"{self.tool}: ({snapped_pos.x():.2f}, {snapped_pos.y():.2f})"
-            
-            self.tooltip_item.setText(tooltip_text)
-            self.tooltip_item.setPos(snapped_pos.x() + 5, snapped_pos.y() - 10)
+            self.tooltip_item.setText(self.tool)
+            scene_pos = self.mapToScene(event.pos())
+            self.tooltip_item.setPos(scene_pos.x() + 5, scene_pos.y() - 10)
         else:
             if self.tooltip_item:
                 self.scene().removeItem(self.tooltip_item)
                 self.tooltip_item = None
-            
-            # В режиме выбора показываем имя объекта под курсором
-            pos = scene_pos
-            item = self.scene().itemAt(pos, QTransform())
-            if item and item.flags() & QGraphicsItem.ItemIsSelectable:
-                # Находим соответствующий объект
-                for obj in self.parent_window.obj_map.values():
-                    if obj.graphics_item == item:
-                        if self.tooltip_item is None:
-                            self.tooltip_item = QGraphicsSimpleTextItem()
-                            self.tooltip_item.setBrush(QBrush(QColor(0,0,255)))
-                            self.tooltip_item.setFont(QFont("Arial", 9, QFont.Bold))
-                            self.scene().addItem(self.tooltip_item)
-                        
-                        obj_name = self.parent_window.object_description(obj)
-                        self.tooltip_item.setText(f"{obj_name}")
-                        self.tooltip_item.setPos(pos.x() + 10, pos.y() + 10)
-                        break
 
         # Подсветка объектов в режиме выбора
         if self.tool == "Select":
-            pos = scene_pos
+            pos = self.mapToScene(event.pos())
             item = self.scene().itemAt(pos, QTransform())
             if item != self.hovered_item:
                 self.clear_highlight()
@@ -504,9 +468,30 @@ class CadView(QGraphicsView):
         else:
             self.clear_highlight()
 
-        # Обработка перемещения для временных объектов
+        # Подсказка привязки
+        if self.snap_manager and self.tool != "Select":
+            point, hint = self.snap_manager.get_snap_info(self, event.pos())
+            if point and hint:
+                if self.hint_item is None:
+                    self.hint_item = QGraphicsSimpleTextItem()
+                    self.hint_item.setBrush(QBrush(QColor(0,0,0)))
+                    self.hint_item.setFont(QFont("Arial", 8))
+                    self.scene().addItem(self.hint_item)
+                self.hint_item.setText(hint)
+                self.hint_item.setPos(point.x() + 5, point.y() - 10)
+                self.hint_item.show()
+            else:
+                if self.hint_item:
+                    self.hint_item.hide()
+        else:
+            if self.hint_item:
+                self.hint_item.hide()
+
+        # Временные объекты
         if self.start_point and self.temp_item:
-            pos = snapped_pos if self.snap_manager else scene_pos
+            pos = self.mapToScene(event.pos())
+            if self.snap_manager:
+                pos = self.snap_manager.snap_point(self, event.pos())
             if self.tool == "Line":
                 self.temp_item.setLine(QLineF(self.start_point, pos))
             elif self.tool == "Circle":
@@ -555,7 +540,6 @@ class CadView(QGraphicsView):
         self.parent_window.update_snap_settings(self.snap_manager.snap_to_endpoints, enabled)
 
     def highlight_item(self, item):
-        """Подсветка объекта изменением пера или цвета текста."""
         if hasattr(item, 'pen'):
             self.original_pen = item.pen()
             new_pen = QPen(QColor(255, 0, 0), self.original_pen.widthF() + 0.2)
@@ -566,7 +550,6 @@ class CadView(QGraphicsView):
             item.setDefaultTextColor(QColor(255, 0, 0))
 
     def clear_highlight(self):
-        """Восстановление исходного вида объекта."""
         if self.hovered_item:
             if hasattr(self.hovered_item, 'pen') and self.original_pen is not None:
                 self.hovered_item.setPen(self.original_pen)
@@ -575,80 +558,6 @@ class CadView(QGraphicsView):
             self.hovered_item = None
             self.original_pen = None
             self.original_color = None
-
-    def mouseReleaseEvent(self, event):
-        """Обработка отпускания кнопки мыши для завершения панорамирования"""
-        if event.button() == Qt.MiddleButton:
-            self._panning = False
-            self._last_pan_pos = None
-            self.setCursor(Qt.ArrowCursor)
-            event.accept()
-            return
-        super().mouseReleaseEvent(event)
-
-    def keyPressEvent(self, event):
-        """Обработка клавиши ESC для отмены текущей команды, Delete для удаления и _m для перемещения"""
-        if event.key() == Qt.Key_Escape:
-            # Сброс режима панорамирования если активен
-            if self._panning:
-                self._panning = False
-                self._last_pan_pos = None
-                self.setCursor(Qt.ArrowCursor)
-            elif self.tool != "Select":
-                # Отмена текущей операции рисования
-                if self.temp_item:
-                    self.scene().removeItem(self.temp_item)
-                    self.temp_item = None
-                self.start_point = None
-                # Переключение в режим выбора
-                self.parent_window.set_tool("Select")
-            event.accept()
-        elif event.key() == Qt.Key_Delete:
-            # Удаление выделенных объектов
-            if self.tool == "Select":
-                self.parent_window.delete_selected()
-            event.accept()
-        elif event.key() == Qt.Key_M:
-            # Команда _m - переход в режим перемещения (панорамирования)
-            if self.tool == "Select":
-                self._move_mode = True
-                self.setCursor(Qt.OpenHandCursor)
-                self.parent_window.status_label.setText("Move mode: Click and drag to pan. Press ESC to exit.")
-            event.accept()
-        else:
-            super().keyPressEvent(event)
-
-    def keyReleaseEvent(self, event):
-        """Обработка отпускания клавиш"""
-        if event.key() == Qt.Key_M:
-            self._move_mode = False
-        super().keyReleaseEvent(event)
-
-    def setScene(self, scene):
-        super().setScene(scene)
-        if self.snap_manager is None:
-            self.snap_manager = SnapManager(scene)
-        else:
-            self.snap_manager.scene = scene
-
-    def set_tool(self, tool):
-        self.tool = tool
-        self.start_point = None
-        if self.temp_item:
-            self.scene().removeItem(self.temp_item)
-            self.temp_item = None
-        if self.tooltip_item:
-            self.scene().removeItem(self.tooltip_item)
-            self.tooltip_item = None
-        # Сброс режима перемещения при смене инструмента
-        self._move_mode = False
-        if tool == "Select":
-            self.setCursor(Qt.ArrowCursor)
-        else:
-            self.setCursor(Qt.CrossCursor)
-
-    def set_dim_type(self, dim_type):
-        self.dim_type = dim_type
 
     def finish_drawing(self, pos):
         if self.tool == "Line":
@@ -793,12 +702,10 @@ class CadWindow(QMainWindow):
         self.dxf_modelspace = None
         self.obj_map = {}
         self.current_file = None
-        self._unsaved_changes = False
 
-        # Инициализируем statusbar ДО вызова init_ui, т.к. setup_paper_format использует status_label
-        self.init_statusbar()
         self.init_ui()
-        self.create_empty_document()   # создаём пустой документ без запроса пути
+        self.init_statusbar()
+        self.create_empty_document()
 
     def init_ui(self):
         toolbar = self.addToolBar("Tools")
@@ -810,10 +717,14 @@ class CadWindow(QMainWindow):
         save_action.triggered.connect(self.save_file)
         save_as_action = QAction("Save As...", self)
         save_as_action.triggered.connect(self.save_as_file)
+        export_pdf_action = QAction("Export PDF", self)
+        export_pdf_action.triggered.connect(self.export_pdf)
+
         toolbar.addAction(new_action)
         toolbar.addAction(open_action)
         toolbar.addAction(save_action)
         toolbar.addAction(save_as_action)
+        toolbar.addAction(export_pdf_action)
         toolbar.addSeparator()
 
         select_action = QAction("Select", self)
@@ -828,6 +739,8 @@ class CadWindow(QMainWindow):
         arc_action.triggered.connect(lambda: self.set_tool("Arc"))
         text_action = QAction("Text", self)
         text_action.triggered.connect(lambda: self.set_tool("Text"))
+        trim_action = QAction("Trim", self)
+        trim_action.triggered.connect(lambda: self.set_tool("Trim"))
 
         toolbar.addAction(select_action)
         toolbar.addAction(line_action)
@@ -835,20 +748,12 @@ class CadWindow(QMainWindow):
         toolbar.addAction(rect_action)
         toolbar.addAction(arc_action)
         toolbar.addAction(text_action)
+        toolbar.addAction(trim_action)
         toolbar.addSeparator()
 
-        # Дополнительные инструменты рисования
-        polyline_action = QAction("Polyline", self)
-        polyline_action.triggered.connect(lambda: self.set_tool("Polyline"))
-        ellipse_action = QAction("Ellipse", self)
-        ellipse_action.triggered.connect(lambda: self.set_tool("Ellipse"))
-        polygon_action = QAction("Polygon", self)
-        polygon_action.triggered.connect(lambda: self.set_tool("Polygon"))
-        
-        toolbar.addAction(polyline_action)
-        toolbar.addAction(ellipse_action)
-        toolbar.addAction(polygon_action)
-        toolbar.addSeparator()
+        delete_action = QAction("Delete", self)
+        delete_action.triggered.connect(self.delete_selected)
+        toolbar.addAction(delete_action)
 
         self.dim_type_combo = QComboBox()
         self.dim_type_combo.addItems(["Linear", "Radius", "Diameter", "Angular"])
@@ -858,60 +763,6 @@ class CadWindow(QMainWindow):
         toolbar.addWidget(QLabel("Dim type:"))
         toolbar.addWidget(self.dim_type_combo)
         toolbar.addAction(dim_action)
-        toolbar.addSeparator()
-        
-        # Инструменты редактирования (AutoCAD-style)
-        move_action = QAction("Move", self)
-        move_action.setShortcut("Ctrl+M")
-        move_action.triggered.connect(self.move_selected)
-        copy_action = QAction("Copy", self)
-        copy_action.setShortcut("Ctrl+C")
-        copy_action.triggered.connect(self.copy_selected)
-        rotate_action = QAction("Rotate", self)
-        rotate_action.setShortcut("Ctrl+R")
-        rotate_action.triggered.connect(self.rotate_selected)
-        scale_action = QAction("Scale", self)
-        scale_action.setShortcut("Ctrl+S")
-        scale_action.triggered.connect(self.scale_selected)
-        mirror_action = QAction("Mirror", self)
-        mirror_action.triggered.connect(self.mirror_selected)
-        trim_action = QAction("Trim", self)
-        trim_action.triggered.connect(self.trim_selected)
-        extend_action = QAction("Extend", self)
-        extend_action.triggered.connect(self.extend_selected)
-        offset_action = QAction("Offset", self)
-        offset_action.triggered.connect(self.offset_selected)
-        fillet_action = QAction("Fillet", self)
-        fillet_action.triggered.connect(self.fillet_selected)
-        chamfer_action = QAction("Chamfer", self)
-        chamfer_action.triggered.connect(self.chamfer_selected)
-        
-        toolbar.addAction(move_action)
-        toolbar.addAction(copy_action)
-        toolbar.addAction(rotate_action)
-        toolbar.addAction(scale_action)
-        toolbar.addAction(mirror_action)
-        toolbar.addSeparator()
-        toolbar.addAction(trim_action)
-        toolbar.addAction(extend_action)
-        toolbar.addAction(offset_action)
-        toolbar.addAction(fillet_action)
-        toolbar.addAction(chamfer_action)
-        toolbar.addSeparator()
-        
-        # Выбор формата бумаги
-        self.paper_format_combo = QComboBox()
-        self.paper_format_combo.addItems(["A0", "A1", "A2", "A3", "A4"])
-        self.paper_format_combo.setCurrentText("A3")
-        self.paper_format_combo.currentTextChanged.connect(self.on_paper_format_changed)
-        toolbar.addWidget(QLabel("Paper:"))
-        toolbar.addWidget(self.paper_format_combo)
-        toolbar.addSeparator()
-        
-        # Кнопка печати/экспорта в PDF
-        print_action = QAction("Print / Export PDF", self)
-        print_action.triggered.connect(self.print_to_pdf)
-        toolbar.addAction(print_action)
 
         # Панель объектов слева
         left_dock = QDockWidget("Objects", self)
@@ -923,10 +774,6 @@ class CadWindow(QMainWindow):
         edit_button = QPushButton("Edit Selected")
         edit_button.clicked.connect(self.edit_selected)
         layout_left.addWidget(edit_button)
-        delete_button = QPushButton("Delete Selected")
-        delete_button.setShortcut("Delete")
-        delete_button.clicked.connect(self.delete_selected)
-        layout_left.addWidget(delete_button)
         left_dock.setWidget(container_left)
         self.addDockWidget(Qt.LeftDockWidgetArea, left_dock)
 
@@ -935,7 +782,6 @@ class CadWindow(QMainWindow):
         container_right = QWidget()
         layout_right = QVBoxLayout(container_right)
 
-        # Группа привязок
         snap_group = QGroupBox("Snap Settings")
         snap_layout = QVBoxLayout()
         self.snap_end_check = QCheckBox("Snap to endpoints")
@@ -949,7 +795,6 @@ class CadWindow(QMainWindow):
         snap_group.setLayout(snap_layout)
         layout_right.addWidget(snap_group)
 
-        # Группа стилей линии
         style_group = QGroupBox("Line Style")
         style_layout = QFormLayout()
         self.line_color_btn = QPushButton("Choose Color")
@@ -963,30 +808,38 @@ class CadWindow(QMainWindow):
         style_group.setLayout(style_layout)
         layout_right.addWidget(style_group)
 
-        # Кнопка применить стиль к выделенному объекту
         apply_style_btn = QPushButton("Apply Style to Selected")
         apply_style_btn.clicked.connect(self.apply_style_to_selected)
         layout_right.addWidget(apply_style_btn)
+
+        prop_group = QGroupBox("Selected Object Properties")
+        prop_layout = QFormLayout()
+        self.prop_type = QLabel("")
+        self.prop_start = QLabel("")
+        self.prop_end = QLabel("")
+        self.prop_linetype = QLabel("")
+        self.prop_color = QLabel("")
+        self.prop_width = QLabel("")
+        prop_layout.addRow("Type:", self.prop_type)
+        prop_layout.addRow("Start:", self.prop_start)
+        prop_layout.addRow("End:", self.prop_end)
+        prop_layout.addRow("Line type:", self.prop_linetype)
+        prop_layout.addRow("Color:", self.prop_color)
+        prop_layout.addRow("Width:", self.prop_width)
+        prop_group.setLayout(prop_layout)
+        layout_right.addWidget(prop_group)
 
         container_right.setLayout(layout_right)
         right_dock.setWidget(container_right)
         self.addDockWidget(Qt.RightDockWidgetArea, right_dock)
 
-        # Сохраняем текущие настройки стиля
         self.current_line_color = QColor(0,0,0)
         self.current_line_width = 0.2
         self.current_line_type = "Solid"
-        
-        # Формат бумаги (по умолчанию A3)
-        self.paper_format = "A3"
-        self.paper_sizes = {
-            "A0": (841, 1189),  # мм
-            "A1": (594, 841),
-            "A2": (420, 594),
-            "A3": (297, 420),
-            "A4": (210, 297)
-        }
-        self.setup_paper_format("A3")
+        self.line_color_btn.setStyleSheet("background-color: black")
+        self.line_color_btn.color = self.current_line_color
+
+        self.scene.selectionChanged.connect(self.update_selected_properties)
 
     def init_statusbar(self):
         self.status = QStatusBar()
@@ -995,7 +848,6 @@ class CadWindow(QMainWindow):
         self.status.addWidget(self.status_label)
 
     def create_empty_document(self):
-        """Создаёт новый пустой документ в памяти без запроса имени файла."""
         self.dxf_doc = ezdxf.new('R2010')
         self.dxf_modelspace = self.dxf_doc.modelspace()
         self.current_file = None
@@ -1034,13 +886,11 @@ class CadWindow(QMainWindow):
             self.line_color_btn.color = color
 
     def apply_style_to_selected(self):
-        """Применить текущие настройки стиля к выделенному объекту."""
         selected = self.scene.selectedItems()
         if not selected:
             QMessageBox.information(self, "Info", "No object selected.")
             return
         for item in selected:
-            # Находим соответствующий GraphicObject
             for obj in self.obj_map.values():
                 if obj.graphics_item == item:
                     if hasattr(item, 'pen'):
@@ -1056,7 +906,6 @@ class CadWindow(QMainWindow):
                             pen.setStyle(Qt.SolidLine)
                         item.setPen(pen)
                         if obj.dxf_entity:
-                            # Сохранить в DXF
                             color = pen.color()
                             try:
                                 obj.dxf_entity.dxf.rgb = (color.red(), color.green(), color.blue())
@@ -1084,10 +933,57 @@ class CadWindow(QMainWindow):
                             else:
                                 obj.dxf_entity.dxf.linetype = "CONTINUOUS"
                     break
+        self.update_selected_properties()
         QMessageBox.information(self, "Done", "Style applied to selected object(s).")
 
+    def delete_selected(self):
+        selected = self.scene.selectedItems()
+        if not selected:
+            return
+        for item in selected:
+            for obj in list(self.obj_map.keys()):
+                if self.obj_map[obj].graphics_item == item:
+                    if obj is not None and obj in self.obj_map:
+                        del self.obj_map[obj]
+                    break
+            self.scene.removeItem(item)
+        self.update_list()
+        self.update_selected_properties()
+
+    def update_selected_properties(self):
+        selected = self.scene.selectedItems()
+        if not selected:
+            self.prop_type.setText("")
+            self.prop_start.setText("")
+            self.prop_end.setText("")
+            self.prop_linetype.setText("")
+            self.prop_color.setText("")
+            self.prop_width.setText("")
+            return
+        item = selected[0]
+        for obj in self.obj_map.values():
+            if obj.graphics_item == item:
+                self.prop_type.setText(obj.type)
+                if obj.type == "Line":
+                    self.prop_start.setText(f"({obj.x1:.2f}, {obj.y1:.2f})")
+                    self.prop_end.setText(f"({obj.x2:.2f}, {obj.y2:.2f})")
+                elif obj.type == "Circle":
+                    self.prop_start.setText(f"Center: ({obj.cx:.2f}, {obj.cy:.2f})")
+                    self.prop_end.setText(f"Radius: {obj.radius:.2f}")
+                elif obj.type == "Rectangle":
+                    self.prop_start.setText(f"({obj.x1:.2f}, {obj.y1:.2f})")
+                    self.prop_end.setText(f"({obj.x2:.2f}, {obj.y2:.2f})")
+                else:
+                    self.prop_start.setText("")
+                    self.prop_end.setText("")
+                if hasattr(item, 'pen'):
+                    pen = item.pen()
+                    self.prop_linetype.setText(["Solid", "Dash", "DashDot"][pen.style()])
+                    self.prop_color.setText(pen.color().name())
+                    self.prop_width.setText(f"{pen.widthF():.2f}")
+                break
+
     def new_document(self):
-        # Запрашиваем имя файла, если пользователь хочет сохранить текущий
         if self.dxf_doc and self.obj_map:
             reply = QMessageBox.question(self, "Save changes?",
                                          "Do you want to save changes before creating a new document?",
@@ -1141,13 +1037,57 @@ class CadWindow(QMainWindow):
         fname, _ = QFileDialog.getSaveFileName(self, "Save DXF", "", "DXF Files (*.dxf)")
         if not fname:
             return
+        versions = ["R12", "R2000", "R2004", "R2007", "R2010"]
+        version, ok = QInputDialog.getItem(self, "DXF Version", "Select DXF version:", versions, 4, False)
+        if not ok:
+            return
         try:
-            self._sync_dxf()
-            self.dxf_doc.saveas(fname)
+            new_doc = ezdxf.new(version)
+            new_doc.modelspace().add_entities(list(self.dxf_modelspace))
+            new_doc.saveas(fname)
             self.current_file = fname
+            self.dxf_doc = new_doc
+            self.dxf_modelspace = self.dxf_doc.modelspace()
             QMessageBox.information(self, "Saved", f"File saved to {fname}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Save failed:\n{str(e)}")
+
+def export_pdf(self):
+    """Экспорт текущей сцены в PDF с масштабированием."""
+    if not self.scene.items():
+        QMessageBox.warning(self, "Warning", "Nothing to export.")
+        return
+    fname, _ = QFileDialog.getSaveFileName(self, "Export PDF", "", "PDF Files (*.pdf)")
+    if not fname:
+        return
+
+    printer = QPrinter(QPrinter.HighResolution)
+    printer.setOutputFormat(QPrinter.PdfFormat)
+    printer.setOutputFileName(fname)
+    printer.setPageSize(QPrinter.A4)
+    printer.setOrientation(QPrinter.Landscape)
+
+    bbox = self.scene.itemsBoundingRect()
+    if bbox.isEmpty():
+        QMessageBox.warning(self, "Warning", "Empty drawing.")
+        return
+
+    painter = QPainter(printer)
+    painter.setRenderHint(QPainter.Antialiasing)
+
+    page_rect = printer.pageRect()
+    scale_x = page_rect.width() / bbox.width()
+    scale_y = page_rect.height() / bbox.height()
+    scale = min(scale_x, scale_y) * 0.9
+
+    painter.translate(page_rect.center())
+    painter.scale(scale, scale)
+    painter.translate(-bbox.center())
+
+    self.scene.render(painter)
+    painter.end()
+
+    QMessageBox.information(self, "Exported", f"PDF saved to {fname}")
 
     def _sync_dxf(self):
         for obj in self.obj_map.values():
@@ -1277,51 +1217,15 @@ class CadWindow(QMainWindow):
             if obj.graphics_item == item:
                 dlg = PropertyDialog(obj, self)
                 if dlg.exec_():
-                    pass
+                    self.update_selected_properties()
                 break
 
-    def delete_selected(self):
-        """Удаление выделенных объектов"""
-        selected = self.scene.selectedItems()
-        if not selected:
-            QMessageBox.information(self, "Delete", "No object selected.")
-            return
-        
-        for item in selected:
-            # Находим соответствующий GraphicObject и удаляем из DXF
-            obj_to_remove = None
-            for entity, obj in list(self.obj_map.items()):
-                if obj.graphics_item == item:
-                    obj_to_remove = obj
-                    # Удаляем из DXF документа
-                    if obj.dxf_entity and self.dxf_modelspace:
-                        try:
-                            self.dxf_modelspace.delete_entity(obj.dxf_entity)
-                        except Exception:
-                            pass
-                    break
-            
-            # Удаляем графический элемент из сцены
-            self.scene.removeItem(item)
-            
-            # Удаляем из списка объектов
-            if obj_to_remove:
-                # Обновляем список в левой панели
-                for i in range(self.list_widget.count()):
-                    list_item = self.list_widget.item(i)
-                    if list_item and list_item.text() == self.object_description(obj_to_remove):
-                        self.list_widget.takeItem(i)
-                        break
-                
-                # Удаляем из obj_map
-                for entity, obj in list(self.obj_map.items()):
-                    if obj == obj_to_remove:
-                        del self.obj_map[entity]
-                        break
-        
-        self.status_label.setText("Object(s) deleted")
+    def update_list(self):
+        self.list_widget.clear()
+        for obj in self.obj_map.values():
+            self.list_widget.addItem(self.object_description(obj))
 
-    # ------------------ Добавление новых примитивов ------------------
+    # ------------------ Добавление примитивов ------------------
     def add_line(self, x1, y1, x2, y2):
         entity = self.dxf_modelspace.add_line((x1, y1), (x2, y2))
         obj = LineObject(x1, y1, x2, y2, entity)
@@ -1337,7 +1241,6 @@ class CadWindow(QMainWindow):
         else:
             pen.setStyle(Qt.SolidLine)
         item.setPen(pen)
-        # Сохранить в DXF
         try:
             entity.dxf.rgb = (self.current_line_color.red(), self.current_line_color.green(), self.current_line_color.blue())
         except AttributeError:
@@ -1360,6 +1263,7 @@ class CadWindow(QMainWindow):
         obj.graphics_item = item
         self.obj_map[entity] = obj
         self.list_widget.addItem(f"Line ({x1:.2f},{y1:.2f})-({x2:.2f},{y2:.2f})")
+        return item
 
     def add_circle(self, cx, cy, r):
         entity = self.dxf_modelspace.add_circle((cx, cy), r)
@@ -1398,6 +1302,7 @@ class CadWindow(QMainWindow):
         obj.graphics_item = item
         self.obj_map[entity] = obj
         self.list_widget.addItem(f"Circle (r={r:.2f})")
+        return item
 
     def add_rectangle(self, x1, y1, x2, y2):
         points = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
@@ -1437,6 +1342,7 @@ class CadWindow(QMainWindow):
         obj.graphics_item = item
         self.obj_map[entity] = obj
         self.list_widget.addItem(f"Rectangle")
+        return item
 
     def add_arc(self, cx, cy, r, start_angle, end_angle):
         entity = self.dxf_modelspace.add_arc((cx, cy), r, start_angle, end_angle)
@@ -1475,6 +1381,7 @@ class CadWindow(QMainWindow):
         obj.graphics_item = item
         self.obj_map[entity] = obj
         self.list_widget.addItem(f"Arc")
+        return item
 
     def add_text(self, x, y, text, height=2.5):
         entity = self.dxf_modelspace.add_text(text, dxfattribs={'height': height})
@@ -1498,6 +1405,7 @@ class CadWindow(QMainWindow):
         obj.graphics_item = item
         self.obj_map[entity] = obj
         self.list_widget.addItem(f"Text: {text[:20]}")
+        return item
 
     def add_dimension(self, p1, p2, dim_type="Linear", offset=2):
         obj = DimensionObject(p1, p2, offset, dim_type, None)
@@ -1505,6 +1413,7 @@ class CadWindow(QMainWindow):
         self.scene.addItem(item)
         obj.graphics_item = item
         self.list_widget.addItem(f"Dimension ({dim_type})")
+        return item
 
     def add_radius_dim(self, center, radius):
         obj = DimensionObject(center, center, 0, "Radius", None)
@@ -1513,6 +1422,7 @@ class CadWindow(QMainWindow):
         self.scene.addItem(item)
         obj.graphics_item = item
         self.list_widget.addItem(f"Radius Dimension R{radius:.2f}")
+        return item
 
     def add_diameter_dim(self, center, diameter):
         obj = DimensionObject(center, center, 0, "Diameter", None)
@@ -1521,6 +1431,7 @@ class CadWindow(QMainWindow):
         self.scene.addItem(item)
         obj.graphics_item = item
         self.list_widget.addItem(f"Diameter Dimension Ø{diameter:.2f}")
+        return item
 
     def add_angular_dim(self, vertex, angle):
         obj = DimensionObject(vertex, vertex, 0, "Angular", None)
@@ -1529,309 +1440,7 @@ class CadWindow(QMainWindow):
         self.scene.addItem(item)
         obj.graphics_item = item
         self.list_widget.addItem(f"Angular Dimension {angle:.1f}°")
-
-    # ------------------ Формат бумаги и печать ------------------
-    def setup_paper_format(self, format_name):
-        """Настройка формата бумаги для рабочей области"""
-        if format_name not in self.paper_sizes:
-            return
-        
-        width_mm, height_mm = self.paper_sizes[format_name]
-        # Конвертируем мм в единицы сцены (предполагаем 1 мм = 1 единица)
-        width = width_mm
-        height = height_mm
-        
-        # Очищаем сцену и устанавливаем новый размер
-        rect = QRectF(0, 0, width, height)
-        self.scene.setSceneRect(rect)
-        
-        # Рисуем рамку бумаги
-        self._draw_paper_border(width, height)
-        
-        self.paper_format = format_name
-        self.status_label.setText(f"Paper format: {format_name} ({width}x{height} mm)")
-    
-    def _draw_paper_border(self, width, height):
-        """Рисует рамку бумаги на сцене"""
-        # Удаляем существующую рамку если есть
-        for item in self.scene.items():
-            if hasattr(item, 'is_paper_border') and item.is_paper_border:
-                self.scene.removeItem(item)
-        
-        # Рисуем новую рамку
-        border_rect = QGraphicsRectItem(0, 0, width, height)
-        border_rect.setPen(QPen(QColor(200, 200, 200), 0.5, Qt.DashLine))
-        border_rect.is_paper_border = True
-        border_rect.setFlag(QGraphicsItem.ItemIsSelectable, False)
-        border_rect.setZValue(-1000)  # Помещаем на задний план
-        self.scene.addItem(border_rect)
-    
-    def on_paper_format_changed(self, format_name):
-        """Обработчик изменения формата бумаги"""
-        self.setup_paper_format(format_name)
-    
-    def print_to_pdf(self):
-        """Печать или экспорт в PDF"""
-        # Диалог выбора файла для сохранения PDF
-        fname, _ = QFileDialog.getSaveFileName(
-            self, 
-            "Export to PDF", 
-            "", 
-            "PDF Files (*.pdf)"
-        )
-        if not fname:
-            return
-        
-        try:
-            # Создаем принтер для PDF
-            printer = QPrinter(QPrinter.HighResolution)
-            printer.setOutputFormat(QPrinter.PdfFormat)
-            printer.setOutputFileName(fname)
-            
-            # Устанавливаем размер страницы согласно выбранному формату
-            width_mm, height_mm = self.paper_sizes[self.paper_format]
-            page_layout = QPageLayout()
-            page_size = QPageSize(QSizeF(width_mm, height_mm), QPageSize.Millimeter)
-            page_layout.setPageSize(page_size)
-            page_layout.setMargins(QMarginsF(5, 5, 5, 5))  # Небольшие поля
-            printer.setPageLayout(page_layout)
-            
-            # Создаем painter для рендеринга
-            painter = QPainter(printer)
-            painter.setRenderHint(QPainter.Antialiasing)
-            
-            # Получаем границы содержимого сцены
-            scene_rect = self.scene.itemsBoundingRect()
-            if scene_rect.isEmpty():
-                QMessageBox.warning(self, "Warning", "No content to print.")
-                painter.end()
-                return
-            
-            # Масштабируем для размещения на странице
-            # Учитываем поля
-            page_rect = printer.pageRect(QPrinter.DevicePixel)
-            
-            # Рассчитываем масштаб для fit-in-page
-            scale_x = page_rect.width() / scene_rect.width()
-            scale_y = page_rect.height() / scene_rect.height()
-            scale = min(scale_x, scale_y) * 0.95  # 95% для запасa
-            
-            painter.scale(scale, scale)
-            
-            # Центрируем содержимое на странице
-            translate_x = -scene_rect.left() + (page_rect.width() / scale - scene_rect.width()) / 2
-            translate_y = -scene_rect.top() + (page_rect.height() / scale - scene_rect.height()) / 2
-            painter.translate(translate_x, translate_y)
-            
-            # Рендерим сцену
-            self.scene.render(painter)
-            
-            painter.end()
-            
-            QMessageBox.information(self, "Success", f"PDF exported to:\n{fname}")
-            self.status_label.setText(f"Exported to PDF: {fname}")
-            
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to export PDF:\n{str(e)}")
-            traceback.print_exc()
-
-    # ------------------ Функции редактирования (AutoCAD-style) ------------------
-    def move_selected(self):
-        """Перемещение выделенных объектов"""
-        selected = self.scene.selectedItems()
-        if not selected:
-            QMessageBox.information(self, "Info", "No objects selected.")
-            return
-        
-        # Запрашиваем смещение
-        dx, ok_x = QInputDialog.getDouble(self, "Move", "Enter X offset:", 0.0)
-        if not ok_x:
-            return
-        dy, ok_y = QInputDialog.getDouble(self, "Move", "Enter Y offset:", 0.0)
-        if not ok_y:
-            return
-        
-        for item in selected:
-            item.moveBy(dx, dy)
-            # Обновляем координаты в объекте
-            for obj in self.obj_map.values():
-                if obj.graphics_item == item:
-                    if hasattr(obj, 'x1'):
-                        obj.x1 += dx
-                        obj.y1 += dy
-                    if hasattr(obj, 'x2'):
-                        obj.x2 += dx
-                        obj.y2 += dy
-                    if hasattr(obj, 'cx'):
-                        obj.cx += dx
-                        obj.cy += dy
-                    break
-        self.status_label.setText(f"Moved {len(selected)} object(s)")
-    
-    def copy_selected(self):
-        """Копирование выделенных объектов"""
-        selected = self.scene.selectedItems()
-        if not selected:
-            QMessageBox.information(self, "Info", "No objects selected.")
-            return
-        
-        # Запрашиваем смещение для копии
-        dx, ok_x = QInputDialog.getDouble(self, "Copy", "Enter X offset:", 10.0)
-        if not ok_x:
-            return
-        dy, ok_y = QInputDialog.getDouble(self, "Copy", "Enter Y offset:", 10.0)
-        if not ok_y:
-            return
-        
-        for item in selected:
-            # Находим соответствующий объект
-            for obj in self.obj_map.values():
-                if obj.graphics_item == item:
-                    # Создаем копию объекта
-                    if obj.type == "Line":
-                        self.add_line(obj.x1 + dx, obj.y1 + dy, obj.x2 + dx, obj.y2 + dy)
-                    elif obj.type == "Circle":
-                        self.add_circle(obj.cx + dx, obj.cy + dy, obj.radius)
-                    elif obj.type == "Rectangle":
-                        self.add_rectangle(obj.x1 + dx, obj.y1 + dy, obj.x2 + dx, obj.y2 + dy)
-                    elif obj.type == "Arc":
-                        self.add_arc(obj.cx + dx, obj.cy + dy, obj.radius, obj.start_angle, obj.end_angle)
-                    elif obj.type == "Text":
-                        self.add_text(obj.x + dx, obj.y + dy, obj.text, obj.height)
-                    break
-        self.status_label.setText(f"Copied {len(selected)} object(s)")
-    
-    def rotate_selected(self):
-        """Вращение выделенных объектов"""
-        selected = self.scene.selectedItems()
-        if not selected:
-            QMessageBox.information(self, "Info", "No objects selected.")
-            return
-        
-        # Запрашиваем центр вращения и угол
-        cx, ok_x = QInputDialog.getDouble(self, "Rotate", "Center X:", 0.0)
-        if not ok_x:
-            return
-        cy, ok_y = QInputDialog.getDouble(self, "Rotate", "Center Y:", 0.0)
-        if not ok_y:
-            return
-        angle, ok_a = QInputDialog.getDouble(self, "Rotate", "Angle (degrees):", 90.0)
-        if not ok_a:
-            return
-        
-        center = QPointF(cx, cy)
-        for item in selected:
-            item.setRotation(item.rotation() + angle)
-            # Для точного вращения нужно обновить координаты
-            # Упрощенная реализация - вращение вокруг центра объекта
-        self.status_label.setText(f"Rotated {len(selected)} object(s) by {angle}°")
-    
-    def scale_selected(self):
-        """Масштабирование выделенных объектов"""
-        selected = self.scene.selectedItems()
-        if not selected:
-            QMessageBox.information(self, "Info", "No objects selected.")
-            return
-        
-        factor, ok = QInputDialog.getDouble(self, "Scale", "Scale factor:", 2.0, 0.1, 10.0)
-        if not ok:
-            return
-        
-        for item in selected:
-            item.setScale(item.scale() * factor)
-        self.status_label.setText(f"Scaled {len(selected)} object(s) by {factor}x")
-    
-    def mirror_selected(self):
-        """Отражение выделенных объектов"""
-        selected = self.scene.selectedItems()
-        if not selected:
-            QMessageBox.information(self, "Info", "No objects selected.")
-            return
-        
-        axis, ok = QInputDialog.getItem(self, "Mirror", "Mirror axis:", ["Horizontal", "Vertical"], 0, False)
-        if not ok:
-            return
-        
-        for item in selected:
-            if axis == "Horizontal":
-                item.setScale(1, -1)
-            else:
-                item.setScale(-1, 1)
-        self.status_label.setText(f"Mired {len(selected)} object(s)")
-    
-    def trim_selected(self):
-        """Обрезка объектов (упрощенная реализация)"""
-        QMessageBox.information(self, "Trim", "Select cutting edges first, then objects to trim.\n(Full implementation requires complex geometry calculations)")
-        self.set_tool("Trim")
-        self.status_label.setText("Trim mode: Select cutting edges")
-    
-    def extend_selected(self):
-        """Удлинение объектов до границы (упрощенная реализация)"""
-        QMessageBox.information(self, "Extend", "Select boundary edges first, then objects to extend.\n(Full implementation requires complex geometry calculations)")
-        self.set_tool("Extend")
-        self.status_label.setText("Extend mode: Select boundary edges")
-    
-    def offset_selected(self):
-        """Создание подобия объекта на заданном расстоянии"""
-        selected = self.scene.selectedItems()
-        if not selected:
-            QMessageBox.information(self, "Info", "No objects selected.")
-            return
-        
-        distance, ok = QInputDialog.getDouble(self, "Offset", "Offset distance:", 5.0)
-        if not ok:
-            return
-        
-        for item in selected:
-            for obj in self.obj_map.values():
-                if obj.graphics_item == item:
-                    if obj.type == "Line":
-                        # Смещаем линию перпендикулярно
-                        dx = obj.x2 - obj.x1
-                        dy = obj.y2 - obj.y1
-                        length = math.hypot(dx, dy)
-                        if length > 0:
-                            nx = -dy / length * distance
-                            ny = dx / length * distance
-                            self.add_line(obj.x1 + nx, obj.y1 + ny, obj.x2 + nx, obj.y2 + ny)
-                    elif obj.type == "Circle":
-                        self.add_circle(obj.cx, obj.cy, obj.radius + distance)
-                    elif obj.type == "Rectangle":
-                        # Увеличиваем прямоугольник
-                        self.add_rectangle(obj.x1 - distance, obj.y1 - distance, 
-                                         obj.x2 + distance, obj.y2 + distance)
-                    break
-        self.status_label.setText(f"Offset created for {len(selected)} object(s)")
-    
-    def fillet_selected(self):
-        """Скругление углов (упрощенная реализация)"""
-        selected = self.scene.selectedItems()
-        if len(selected) < 2:
-            QMessageBox.information(self, "Info", "Select two lines to fillet.")
-            return
-        
-        radius, ok = QInputDialog.getDouble(self, "Fillet", "Fillet radius:", 5.0)
-        if not ok:
-            return
-        
-        QMessageBox.information(self, "Fillet", f"Fillet with radius {radius} would be applied here.\n(Full implementation requires intersection calculations)")
-    
-    def chamfer_selected(self):
-        """Фаска (упрощенная реализация)"""
-        selected = self.scene.selectedItems()
-        if len(selected) < 2:
-            QMessageBox.information(self, "Info", "Select two lines to chamfer.")
-            return
-        
-        dist1, ok1 = QInputDialog.getDouble(self, "Chamfer", "First distance:", 5.0)
-        if not ok1:
-            return
-        dist2, ok2 = QInputDialog.getDouble(self, "Chamfer", "Second distance:", 5.0)
-        if not ok2:
-            return
-        
-        QMessageBox.information(self, "Chamfer", f"Chamfer with distances {dist1} and {dist2} would be applied here.\n(Full implementation requires intersection calculations)")
-
+        return item
 
 def main():
     app = QApplication(sys.argv)

@@ -695,8 +695,8 @@ class CadWindow(QMainWindow):
         self.current_file = None
         self._unsaved_changes = False
 
-        self.init_ui()
         self.init_statusbar()
+        self.init_ui()
         self.create_empty_document()   # создаём пустой документ без запроса пути
 
     def init_ui(self):
